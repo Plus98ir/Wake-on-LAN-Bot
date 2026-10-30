@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wake-on-LAN Bot</title>
+<meta name="description" content="Turn your PC on from your phone with a Bale or Telegram bot, then start its apps.">
+<link rel="icon" href="src/pc/app/icon.png">
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--text:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--acc2:#7c3aed;--ok:#3fb950;
+  --font:"Segoe UI",Tahoma,"Vazirmatn",system-ui,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 var(--font)}
+header{display:flex;align-items:center;gap:14px;padding:16px 32px;border-bottom:1px solid var(--line)}
+header img{width:40px;height:40px}
+header b{flex:1;font-size:18px}
+.lang{background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 14px;font:14px var(--font);cursor:pointer}
+main{width:100%;padding:24px 32px}
+.hero{display:grid;grid-template-columns:1.3fr 1fr;gap:32px;align-items:center;padding:32px 0 40px}
+.hero h1{font-size:40px;line-height:1.25;margin:0 0 14px}
+.hero h1 span{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{color:var(--mut);font-size:18px;margin:0 0 24px}
+.btns{display:flex;gap:12px;flex-wrap:wrap}
+.btn{display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--text)}
+.btn.pri{background:linear-gradient(90deg,var(--acc),var(--acc2));border:0;color:#fff}
+.phone{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;max-width:420px;justify-self:center;width:100%}
+.phone .msg{background:#0b0f14;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;direction:ltr;text-align:left;font-size:14px}
+.phone .kb{display:grid;grid-template-columns:1fr 1fr;gap:8px;direction:ltr}
+.phone .kb div{background:#21262d;border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center;font-size:14px}
+h2{font-size:24px;margin:40px 0 16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card .ic{font-size:26px}
+.card h3{margin:6px 0;font-size:17px}
+.card p{margin:0;color:var(--mut);font-size:15px}
+ol.steps{counter-reset:s;list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+ol.steps li{counter-increment:s;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+ol.steps li::before{content:counter(s);display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--acc);color:#fff;font-weight:700;margin-bottom:8px}
+ol.steps b{display:block;margin-bottom:4px}
+ol.steps span{color:var(--mut);font-size:15px}
+pre{background:#0b0f14;border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;direction:ltr;text-align:left;font:14px/1.6 Consolas,monospace;margin:0}
+.diagram{white-space:pre;font-size:13px}
+footer{padding:24px 32px;border-top:1px solid var(--line);color:var(--mut);font-size:14px;margin-top:40px}
+footer a,main a{color:var(--acc)}
+@media (max-width:800px){header,main,footer{padding-left:16px;padding-right:16px}.hero{grid-template-columns:1fr}.hero h1{font-size:30px}}
+</style>
+</head>
+<body>
+<header>
+  <img src="src/pc/app/icon.png" alt="">
+  <b>Wake-on-LAN Bot</b>
+  <a class="btn" href="https://github.com/Plus98ir/Wake-on-LAN-Bot" style="padding:6px 14px">GitHub</a>
+  <button class="lang" id="lang">English</button>
+</header>
+<main>
+  <section class="hero">
+    <div>
+      <h1 data-t="h1"></h1>
+      <p data-t="sub"></p>
+      <div class="btns">
+        <a class="btn pri" href="https://github.com/Plus98ir/Wake-on-LAN-Bot/releases/latest" data-t="dl"></a>
+        <a class="btn" href="https://github.com/Plus98ir/Wake-on-LAN-Bot#readme" data-t="docs"></a>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="msg">🖥 PC (AA:BB:CC:…)<br>Status: 🟢 online<br><br>✅ PC is online after 38 s.</div>
+      <div class="kb">
+        <div>⚡ Wake</div><div>🔄 Refresh</div>
+        <div>▶️ v2rayN</div><div>▶️ VS Code</div>
+        <div>🔒 Lock</div><div>👤 Who</div>
+        <div>🔁 Restart</div><div>⏻ Shut down</div>
+      </div>
+    </div>
+  </section>
+
+  <h2 data-t="whatT"></h2>
+  <div class="grid">
+    <div class="card"><div class="ic">⚡</div><h3 data-t="f1"></h3><p data-t="f1d"></p></div>
+    <div class="card"><div class="ic">▶️</div><h3 data-t="f2"></h3><p data-t="f2d"></p></div>
+    <div class="card"><div class="ic">💻</div><h3 data-t="f3"></h3><p data-t="f3d"></p></div>
+    <div class="card"><div class="ic">🛡</div><h3 data-t="f4"></h3><p data-t="f4d"></p></div>
+  </div>
+
+  <h2 data-t="howT"></h2>
+  <pre class="diagram">Phone (bot)  ──►  Your server (wolbot)  ──►  router / modem  ──magic packet──►  PC
+                         ▲                                                     │
+                         └─────────── reverse SSH tunnel (opened by the PC) ◄──┘</pre>
+
+  <h2 data-t="stepsT"></h2>
+  <ol class="steps">
+    <li><b data-t="s1"></b><span data-t="s1d"></span></li>
+    <li><b data-t="s2"></b><span data-t="s2d"></span></li>
+    <li><b data-t="s3"></b><span data-t="s3d"></span></li>
+    <li><b data-t="s4"></b><span data-t="s4d"></span></li>
+  </ol>
+
+  <h2 data-t="srvT"></h2>
+  <pre>git clone https://github.com/Plus98ir/Wake-on-LAN-Bot.git
+cd Wake-on-LAN-Bot/src/server
+sudo bash install.sh --token &lt;BOT_TOKEN&gt; --public-host &lt;server-ip&gt;
+wolbot admin &lt;your-id&gt; &amp;&amp; systemctl restart wol-bot</pre>
+</main>
+<footer data-t="foot"></footer>
+<script>
+const L={
+fa:{h1:"کامپیوترت را از <span>توی گوشی</span> روشن کن",sub:"با یک بات بله یا تلگرام: روشن کن، v2rayN و VS Code را اجرا کن، قفل یا خاموشش کن. پشت هر مودمی کار می‌کند.",
+ dl:"دانلود WOL Agent",docs:"راهنمای کامل",whatT:"چه کار می‌کند؟",
+ f1:"روشن کردن از راه دور",f1d:"یک دکمه در بات، کامپیوتر خاموش روشن می‌شود و بات خبر می‌دهد کی بالا آمد.",
+ f2:"اجرای برنامه‌ها",f2d:"v2rayN و VS Code را روی دسکتاپ اجرا کن؛ قفل، ری‌استارت و خاموش کردن هم هست.",
+ f3:"VS Code از هر جا",f3d:"با Remote-SSH از لپ‌تاپ به کامپیوتر خانه وصل شو، بدون باز کردن پورت در خانه.",
+ f4:"امن",f4d:"کامپیوتر خودش به سرور وصل می‌شود؛ کد اتصال یک‌بار مصرف است و فقط ادمین به بات دسترسی دارد.",
+ howT:"چطور کار می‌کند؟",stepsT:"راه‌اندازی در ۴ قدم",
+ s1:"سرور",s1d:"اسکریپت نصب را روی یک سرور لینوکسی اجرا کن و توکن بات را بده.",
+ s2:"BIOS",s2d:"ErP = Disabled و Power On By PCI-E = Enabled. کامپیوتر با کابل به مودم وصل باشد.",
+ s3:"اتصال کامپیوتر",s3d:"در بات بزن ➕ Add PC، برنامه‌ی WOL Agent را اجرا کن و کد را بچسبان.",
+ s4:"مودم",s4d:"پورت UDP 9 را به آی‌پی کامپیوتر فوروارد کن (یا روتر OpenWrt). تمام!",
+ srvT:"نصب سرور",foot:"Wake-on-LAN Bot — متن‌باز روی <a href='https://github.com/Plus98ir/Wake-on-LAN-Bot'>GitHub</a>"},
+en:{h1:"Turn your PC on <span>from your phone</span>",sub:"With a Bale or Telegram bot: wake it, start v2rayN and VS Code, lock it or shut it down. Works behind any modem.",
+ dl:"Download WOL Agent",docs:"Full guide",whatT:"What it does",
+ f1:"Remote wake",f1d:"One button in the bot wakes the PC, and the bot tells you when it is up.",
+ f2:"Start apps",f2d:"Start v2rayN and VS Code on the desktop; lock, restart and shut down too.",
+ f3:"VS Code anywhere",f3d:"Remote-SSH from your laptop to the home PC, no open ports at home.",
+ f4:"Safe",f4d:"The PC connects out to your server; pair codes are one-time and only admins can use the bot.",
+ howT:"How it works",stepsT:"Set up in 4 steps",
+ s1:"Server",s1d:"Run the install script on a Linux server and give it the bot token.",
+ s2:"BIOS",s2d:"ErP = Disabled, Power On By PCI-E = Enabled. The PC must be on a cable.",
+ s3:"Link the PC",s3d:"Press ➕ Add PC in the bot, run WOL Agent and paste the code.",
+ s4:"Modem",s4d:"Forward UDP port 9 to the PC's IP (or use an OpenWrt router). Done!",
+ srvT:"Server install",foot:"Wake-on-LAN Bot — open source on <a href='https://github.com/Plus98ir/Wake-on-LAN-Bot'>GitHub</a>"}};
+let lang="fa";try{lang=localStorage.getItem("lang")||(navigator.language.startsWith("fa")?"fa":"en")}catch(e){}
+function tr(){const t=L[lang];document.documentElement.lang=lang;document.documentElement.dir=lang=="fa"?"rtl":"ltr";
+ document.querySelectorAll("[data-t]").forEach(e=>e.innerHTML=t[e.dataset.t]);document.getElementById("lang").textContent=lang=="fa"?"English":"فارسی";}
+document.getElementById("lang").onclick=()=>{lang=lang=="fa"?"en":"fa";try{localStorage.setItem("lang",lang)}catch(e){};tr();};
+tr();
+</script>
+</body>
+</html>

@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WOL Agent</title>
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--text:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--ok:#3fb950;--bad:#f85149;--warn:#d29922;
+  --font:"Segoe UI",Tahoma,"Vazirmatn",sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 var(--font)}
+header{display:flex;align-items:center;gap:12px;padding:16px 32px;border-bottom:1px solid var(--line)}
+header h1{font-size:20px;margin:0;flex:1}
+header .sub{color:var(--mut);font-size:13px}
+main{width:100%;padding:24px 32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h2{font-size:16px;margin:0 0 12px}
+.wide{grid-column:1/-1}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0}
+dt{color:var(--mut)} dd{margin:0;word-break:break-all;direction:ltr;text-align:start}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+label{display:block;margin:12px 0 4px;font-weight:600}
+.help{color:var(--mut);font-size:13px;margin-top:3px}
+input[type=text],textarea{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:#0b0f14;color:var(--text);font:15px var(--font);direction:ltr}
+textarea{height:64px;font-size:12px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+button{padding:10px 18px;border-radius:8px;border:1px solid var(--line);background:#21262d;color:var(--text);font:600 15px var(--font);cursor:pointer}
+button.pri{background:var(--acc);border-color:var(--acc)}
+button.danger{border-color:var(--bad);color:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+.chk{display:flex;align-items:center;gap:8px;margin-top:12px}
+pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:12px;min-height:220px;max-height:420px;overflow:auto;direction:ltr;text-align:left;font:13px/1.5 Consolas,monospace;white-space:pre-wrap;margin:0}
+ol{margin:12px 0 0;padding-inline-start:20px} li{margin:6px 0}
+.lead{font-size:16px;font-weight:600;margin-bottom:10px}
+.parts{display:grid;gap:6px}
+.parts div{display:flex;gap:10px;align-items:baseline;background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+header img{width:40px;height:40px}
+a{color:var(--acc)}
+.lang{background:none;border:1px solid var(--line);padding:6px 12px;font-size:13px}
+@media (max-width:700px){header,main{padding-left:16px;padding-right:16px} main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <img src="/icon.png" alt="">
+  <div style="flex:1">
+    <h1 data-t="title"></h1>
+    <div class="sub" data-t="subtitle"></div>
+  </div>
+  <button class="lang" id="lang">English</button>
+</header>
+<main>
+  <section class="card">
+    <h2 data-t="sys"></h2>
+    <dl id="sys"><dt>…</dt><dd></dd></dl>
+    <div class="row"><button id="refresh" data-t="refresh"></button></div>
+  </section>
+
+  <section class="card">
+    <h2 data-t="pair"></h2>
+    <label for="code" data-t="code"></label>
+    <input type="text" id="code" placeholder="1.2.3.4:8790/ABCD-2345" autocomplete="off">
+    <div class="help" data-t="codeHelp"></div>
+    <label for="name" data-t="name"></label>
+    <input type="text" id="name">
+    <div class="help" data-t="nameHelp"></div>
+    <label for="wake" data-t="wake"></label>
+    <input type="text" id="wake" placeholder="myhome.ddns.net">
+    <div class="help" data-t="wakeHelp"></div>
+    <label for="xkey" data-t="xkey"></label>
+    <textarea id="xkey" placeholder="ssh-ed25519 AAAA... laptop"></textarea>
+    <div class="help" data-t="xkeyHelp"></div>
+    <div class="chk"><input type="checkbox" id="lock" checked><label for="lock" style="margin:0;font-weight:400" data-t="lock"></label></div>
+    <div class="row">
+      <button class="pri" id="install" data-t="install"></button>
+      <button class="danger" id="uninstall" data-t="uninstall"></button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 data-t="manual"></h2>
+    <div class="lead" data-t="lead"></div>
+    <div class="parts">
+      <div><b>📱</b><span data-t="p1"></span></div>
+      <div><b>💻</b><span data-t="p2"></span></div>
+      <div><b>🖧</b><span data-t="p3"></span></div>
+    </div>
+    <ol>
+      <li data-t="m1"></li>
+      <li data-t="m2"></li>
+      <li data-t="m3"></li>
+      <li data-t="m4"></li>
+      <li data-t="m5"></li>
+      <li data-t="m6"></li>
+    </ol>
+    <div class="help" data-t="more"></div>
+  </section>
+
+  <section class="card wide">
+    <h2 data-t="log"></h2>
+    <pre id="out"></pre>
+  </section>
+</main>
+<script>
+const L={
+ fa:{title:"WOL Agent — روشن کردن و کنترل سیستم از راه دور",subtitle:"این سیستم را به بات وصل کن: کد را از بات (➕ Add PC) بگیر و نصب را بزن.",
+  sys:"این سیستم",refresh:"بررسی دوباره",pair:"اتصال به بات",code:"کد اتصال",codeHelp:"در بات بزن ➕ Add PC و کدی که می‌دهد را اینجا بچسبان. یک‌بار مصرف است و ۱۵ دقیقه اعتبار دارد.",
+  name:"اسم سیستم",nameHelp:"اسمی که در بات نشان داده می‌شود (فقط حروف انگلیسی، عدد، - و _).",
+  wake:"آدرس مودم برای Wake (اختیاری)",wakeHelp:"اگر مودمت آی‌پی ثابت یا DDNS دارد اینجا بنویس. خالی = آی‌پی فعلی اینترنتت. روی مودم پورت UDP 9 را به آی‌پی این سیستم فوروارد کن.",
+  xkey:"کلید لپ‌تاپ برای VS Code (اختیاری)",xkeyHelp:"محتوای فایل id_ed25519.pub لپ‌تاپ؛ برای اتصال Remote-SSH از بیرون.",
+  lock:"بعد از ورود خودکار، صفحه فوراً قفل شود",install:"نصب و اتصال",uninstall:"حذف از این سیستم",
+  manual:"راهنما — چطور کار می‌کند؟",
+  lead:"از توی گوشی، با بات، کامپیوترت را روشن می‌کنی و برنامه‌هایش را باز می‌کنی.",
+  p1:"<b>بات</b> = ریموت کنترل توی گوشی (بله یا تلگرام)",
+  p2:"<b>همین برنامه</b> = یک‌بار اجرا می‌شود تا این کامپیوتر به بات وصل شود",
+  p3:"<b>سرور</b> = واسطه‌ی بین این دو؛ کاری با آن نداری",
+  m1:"<b>BIOS (یک‌بار):</b> موقع روشن شدن Del را بزن ← Advanced ← APM Configuration: گزینه‌ی <b>ErP</b> = Disabled و <b>Power On By PCI-E</b> (یا Wake on LAN) = Enabled. با F10 ذخیره کن.",
+  m2:"<b>کابل:</b> کامپیوتر باید با کابل شبکه به مودم وصل باشد. Wi-Fi برای روشن کردن کار نمی‌کند.",
+  m3:"<b>اتصال:</b> در بات بزن ➕ Add PC، کد را در کادر «کد اتصال» بچسبان و «نصب و اتصال» را بزن.",
+  m4:"<b>ورود خودکار ویندوز (یک‌بار):</b> برنامه‌ی <a href='https://learn.microsoft.com/sysinternals/downloads/autologon' target='_blank'>Autologon</a> را اجرا کن، رمز ویندوز را بده و Enable بزن. ویندوز خودش وارد می‌شود و فوراً قفل می‌شود، پس امن است.",
+  m5:"<b>مودم:</b> اگر روتر OpenWrt نداری، در تنظیمات مودم پورت UDP 9 را به آی‌پی این کامپیوتر فوروارد کن و آن آی‌پی را رزرو (DHCP reservation) کن.",
+  m6:"<b>تست:</b> کامپیوتر را خاموش کن و از گوشی در بات Wake را بزن. دکمه‌های دیگر: v2rayN و VS Code (اجرا)، Lock (قفل)، Shut down (خاموش).",
+  more:"کامپیوتر دیگری داری؟ همین برنامه را روی آن هم اجرا کن و با یک کد تازه از بات وصلش کن.",
+  log:"گزارش",yes:"بله",no:"خیر",running:"در حال اجرا…",needCode:"اول کد اتصال را وارد کن.",confirmUn:"همه‌ی تنظیمات WOL Agent از این سیستم حذف شود؟",
+  k:{name:"اسم",user:"کاربر",os:"ویندوز",board:"مادربرد",nic:"کارت شبکه",mac:"MAC",link:"لینک",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",sshd:"OpenSSH Server",paired:"وصل به بات",tunnel:"تونل"}},
+ en:{title:"WOL Agent — wake and control this PC remotely",subtitle:"Link this PC to the bot: get a code from the bot (➕ Add PC) and press Install.",
+  sys:"This PC",refresh:"Check again",pair:"Link to the bot",code:"Pair code",codeHelp:"In the bot press ➕ Add PC and paste the code here. One use, valid 15 minutes.",
+  name:"PC name",nameHelp:"Shown in the bot (letters, digits, - and _).",
+  wake:"Modem address for Wake (optional)",wakeHelp:"Static IP or DDNS name of your modem. Empty = your current internet IP. Forward UDP port 9 on the modem to this PC.",
+  xkey:"Laptop key for VS Code (optional)",xkeyHelp:"Content of the laptop's id_ed25519.pub, for Remote-SSH from outside.",
+  lock:"Lock the screen right after auto-logon",install:"Install & link",uninstall:"Remove from this PC",
+  manual:"Guide — how does it work?",
+  lead:"From your phone, through the bot, you turn this PC on and open its apps.",
+  p1:"<b>Bot</b> = the remote control on your phone (Bale or Telegram)",
+  p2:"<b>This app</b> = run once to link this PC to the bot",
+  p3:"<b>Server</b> = sits between the two; nothing to do there",
+  m1:"<b>BIOS (once):</b> press Del at boot → Advanced → APM Configuration: <b>ErP</b> = Disabled, <b>Power On By PCI-E</b> (or Wake on LAN) = Enabled. Save with F10.",
+  m2:"<b>Cable:</b> the PC must be wired to the modem. Wake does not work over Wi-Fi.",
+  m3:"<b>Link:</b> in the bot press ➕ Add PC, paste the code into “Pair code” and press “Install & link”.",
+  m4:"<b>Windows auto-logon (once):</b> run <a href='https://learn.microsoft.com/sysinternals/downloads/autologon' target='_blank'>Autologon</a>, enter the Windows password, press Enable. Windows signs in and locks right away, so it stays safe.",
+  m5:"<b>Modem:</b> without an OpenWrt router, forward UDP port 9 to this PC's IP in the modem settings and reserve that IP (DHCP reservation).",
+  m6:"<b>Test:</b> shut the PC down and press Wake in the bot. Other buttons: v2rayN and VS Code (start), Lock, Shut down.",
+  more:"Another PC? Run this app there too and link it with a fresh code from the bot.",
+  log:"Log",yes:"yes",no:"no",running:"Running…",needCode:"Enter the pair code first.",confirmUn:"Remove all WOL Agent settings from this PC?",
+  k:{name:"Name",user:"User",os:"Windows",board:"Board",nic:"Network card",mac:"MAC",link:"Link",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",sshd:"OpenSSH Server",paired:"Linked to bot",tunnel:"Tunnel"}}
+};
+let lang=localStorage.getItem("lang")||"fa", info=null;
+const $=id=>document.getElementById(id);
+function tr(){
+  const t=L[lang];document.documentElement.lang=lang;document.documentElement.dir=lang=="fa"?"rtl":"ltr";
+  document.querySelectorAll("[data-t]").forEach(e=>e.innerHTML=t[e.dataset.t]);
+  $("lang").textContent=lang=="fa"?"English":"فارسی";renderSys();
+}
+function renderSys(){
+  if(!info)return;const t=L[lang],k=t.k;
+  const v=(key,val)=>{
+    if(typeof val=="boolean")return `<span class="${val?"ok":"bad"}">${val?"✓ "+t.yes:"✗ "+t.no}</span>`;
+    if(val===""||val==null)return `<span class="warn">—</span>`;
+    if(key=="wol")return `<span class="${val=="Enabled"?"ok":"bad"}">${val}</span>`;
+    if(key=="sshd")return `<span class="${val=="Running"?"ok":"warn"}">${val}</span>`;
+    return String(val).replace(/</g,"&lt;");
+  };
+  let h="";for(const key of Object.keys(k)){let val=info[key];if(key=="paired"&&info.paired)val=true;
+    h+=`<dt>${k[key]}</dt><dd>${v(key,val)}${key=="paired"&&info.paired?` <span style="color:var(--mut)">(${info.server}, port ${info.port})</span>`:""}</dd>`;}
+  $("sys").innerHTML=h;
+}
+async function detect(){
+  $("sys").innerHTML=`<dt>${L[lang].running}</dt><dd></dd>`;
+  try{info=await (await fetch("/api/detect")).json();if(!$("name").value)$("name").value=info.name;renderSys();}
+  catch(e){$("sys").innerHTML=`<dt class="bad">Error</dt><dd>${e}</dd>`;}
+}
+async function run(body){
+  $("install").disabled=$("uninstall").disabled=true;$("out").textContent=L[lang].running+"\n";
+  try{
+    const r=await fetch("/api/run",{method:"POST",body:JSON.stringify(body)});
+    const rd=r.body.getReader(),dec=new TextDecoder();
+    for(;;){const {done,value}=await rd.read();if(done)break;$("out").textContent+=dec.decode(value,{stream:true});$("out").scrollTop=1e9;}
+  }catch(e){$("out").textContent+="\nERROR: "+e;}
+  $("install").disabled=$("uninstall").disabled=false;detect();
+}
+$("install").onclick=()=>{const code=$("code").value.trim();if(!code){alert(L[lang].needCode);return;}
+  run({action:"install",code,name:$("name").value.trim(),wakeHost:$("wake").value.trim(),extraKey:$("xkey").value.trim(),noLock:!$("lock").checked});};
+$("uninstall").onclick=()=>{if(confirm(L[lang].confirmUn))run({action:"uninstall"});};
+$("refresh").onclick=detect;
+$("lang").onclick=()=>{lang=lang=="fa"?"en":"fa";try{localStorage.setItem("lang",lang)}catch(e){};tr();};
+setInterval(()=>fetch("/api/ping").catch(()=>{}),3000);fetch("/api/ping");
+tr();detect();
+</script>
+</body>
+</html>
