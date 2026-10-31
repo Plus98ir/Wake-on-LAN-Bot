@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 CONF = os.environ.get("WOLBOT_CONF", "/etc/wol-bot/config.json")
@@ -28,8 +29,13 @@ WAKE_WAIT = 240          # seconds to wait for a PC to come online after a wake
 PAIR_TTL = 900           # pair codes live 15 min
 FIRST_TUNNEL_PORT = 2230
 PENDING = os.path.join(HOME, "pair-codes.json")   # pair code -> expiry time (shared with the CLI)
+RELAY_STATE = os.path.join(HOME, "relay-state.json")  # {"queue": {relay id: [mac]}, "seen": {relay id: time}}
+RELAY_SRC = os.path.join(os.path.dirname(os.path.realpath(__file__)), "relay.py")
+IP_CHECK = 300           # seconds between public-IP checks for auto UDP wake targets
 FAILS = {}               # client ip -> [fail times]
 LOCK = threading.Lock()
+
+CLAUDE_PS = r"powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\wol-agent\wol-claude.ps1"
 
 # Default remote commands per OS. Windows apps are scheduled tasks created by setup-pc.ps1
 # (interactive, so they open on the logged-on desktop).
@@ -39,6 +45,9 @@ OS_ACTIONS = {
         "restart": "shutdown /r /t 5 /f",
         "shutdown": "shutdown /s /t 5 /f",
         "who": "query user",
+        "claude": 'schtasks /run /tn "WOL\\Claude"',
+        "claude_status": f"{CLAUDE_PS} -Status",
+        "claude_stop": f"{CLAUDE_PS} -Stop",
     },
     "linux": {
         "lock": "loginctl lock-sessions",
@@ -138,6 +147,15 @@ def wake(m):
                         time.sleep(0.2)
                 good = True
                 report.append(f"udp {w['host']}:{addr[1]}: sent")
+            elif w["type"] == "relay":
+                with LOCK:
+                    st = load_relay_state()
+                    q = st["queue"].setdefault(w["id"], [])
+                    if mac not in q:
+                        q.append(mac)
+                    save_relay_state(st)
+                good = relay_online(w["id"])
+                report.append(f"relay {relay_name(w['id'])}: " + ("sent" if good else "queued, relay is offline"))
             else:
                 good = False
                 report.append(f"unknown wake type {w['type']}")
@@ -148,6 +166,31 @@ def wake(m):
     if not m.get("wake"):
         report.append("no wake method configured")
     return ok, report
+
+
+def load_relay_state():
+    try:
+        with open(RELAY_STATE) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        st = {}
+    return {"queue": st.get("queue", {}), "seen": st.get("seen", {})}
+
+
+def save_relay_state(st):
+    with open(RELAY_STATE, "w") as f:
+        json.dump(st, f)
+
+
+def relay_online(rid):
+    return time.time() - load_relay_state()["seen"].get(rid, 0) < 90
+
+
+def relay_name(rid):
+    try:
+        return next((r["name"] for r in load().get("relays", []) if r["id"] == rid), rid)
+    except (OSError, ValueError):
+        return rid
 
 
 def online(m):
@@ -225,6 +268,9 @@ def status_line(m):
 def machine_view(cfg, i, note=""):
     m = cfg["machines"][i]
     text = f"🖥 {m['name']}  ({m['mac']})\nStatus: {status_line(m)}"
+    for w in m.get("wake", []):
+        if w["type"] == "relay":
+            text += f"\nRelay {relay_name(w['id'])}: {'🟢 online' if relay_online(w['id']) else '🔴 offline'}"
     if note:
         text += f"\n\n{note}"
     kb = [[btn("⚡ Wake", f"w:{i}"), btn("🔄 Refresh", f"s:{i}")]]
@@ -232,9 +278,12 @@ def machine_view(cfg, i, note=""):
         names = list(apps(m))
         for j in range(0, len(names), 2):
             kb.append([btn(f"▶️ {n}", f"a:{i}:{j + k}") for k, n in enumerate(names[j:j + 2])])
+        if "claude" in actions(m):
+            kb.append([btn("🤖 Claude Remote", f"c:{i}"), btn("⏹ Stop Claude", f"k:{i}")])
         kb.append([btn("🔒 Lock", f"l:{i}"), btn("👤 Who", f"u:{i}")])
         kb.append([btn("🔁 Restart", f"r:{i}"), btn("⏻ Shut down", f"h:{i}")])
         kb.append([btn("💻 VS Code Remote-SSH", f"v:{i}")])
+    kb.append([btn("📡 Relay (no public IP)", f"y:{i}")])
     kb.append([btn("🗑 Remove", f"d:{i}"), btn("⬅️ Machines", "m")])
     return text, kb
 
@@ -246,13 +295,15 @@ def list_view(cfg):
     return "Machines\n\n" + "\n".join(lines), kb
 
 
-def new_pair_code():
+def new_pair_code(relay_for=None):
+    """One-time code: plain expiry time for a PC, {"exp", "relay"} for a relay of machine relay_for."""
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     code = "".join(secrets.choice(alphabet) for _ in range(8))
     code = f"{code[:4]}-{code[4:]}"
+    exp = time.time() + PAIR_TTL
     with LOCK:
         codes = load_codes()
-        codes[code] = time.time() + PAIR_TTL
+        codes[code] = {"exp": exp, "relay": relay_for} if relay_for else exp
         save_codes(codes)
     return code
 
@@ -264,7 +315,7 @@ def load_codes():
     except (OSError, ValueError):
         codes = {}
     now = time.time()
-    return {c: t for c, t in codes.items() if t > now}
+    return {c: t for c, t in codes.items() if (t["exp"] if isinstance(t, dict) else t) > now}
 
 
 def save_codes(codes):
@@ -283,6 +334,55 @@ def pair_view(cfg):
             f"The code works once and expires in {PAIR_TTL // 60} min.\n"
             "Before that: BIOS -> Power On By PCI-E = Enabled, ErP = Disabled.")
     return text, [[btn("⬅️ Machines", "m")]]
+
+
+def relay_view(cfg, i):
+    m = cfg["machines"][i]
+    srv = f"{cfg.get('public_host', '<server>')}:{cfg.get('pair_port', 8790)}"
+    code = new_pair_code(m["name"])
+    text = (f"📡 Relay for {m['name']}\n\n"
+            "Needed when the modem has no public IP (TD-LTE, 4G, many fibre lines) or the IP keeps "
+            "changing. A relay is any always-on device in the same home network: an old Android phone, "
+            "a Raspberry Pi or another PC. It asks this server for wake jobs and sends the packet "
+            "inside the home, so the modem needs no setup.\n\n"
+            "Android: install Termux (F-Droid), then type:\n\n"
+            "pkg install python\n"
+            f"curl -O http://{srv}/relay.py\n"
+            f"python relay.py {srv}/{code}\n\n"
+            "Then pull down the Termux notification and tap \"Acquire wakelock\". "
+            "Keep the phone on the charger and on the home Wi-Fi.\n"
+            "Linux / Windows with Python 3: the last two lines.\n"
+            "Later starts: python relay.py\n\n"
+            f"The code works once and expires in {PAIR_TTL // 60} min.")
+    return text, [[btn("⬅️ Back", f"s:{i}")]]
+
+
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
+def claude_wait(api, cfg, chat, mid, i):
+    """Poll the PC until Claude Remote Control prints its link (or an error)."""
+    m = cfg["machines"][i]
+    out = ""
+    for _ in range(12):
+        time.sleep(4)
+        rc, out = pc_run(m, actions(m)["claude_status"])
+        out = ANSI.sub("", out)
+        if re.search(r"https://claude\.ai/\S+|error|not found|not trusted", out, re.I):
+            break
+    url = re.search(r"https://claude\.ai/\S+", out)
+    if url:
+        note = (f"🤖 Claude Remote Control is on.\n\nOpen: {url.group(0)}\n"
+                f"or the Claude app -> Code -> session \"{m['name']}\".")
+    elif out.startswith("running"):
+        note = (f"🤖 Claude Remote Control is on.\nOpen the Claude app or claude.ai/code -> Code -> "
+                f"session \"{m['name']}\".\n\n" + out[-500:])
+    else:
+        note = "🤖 Claude did not start:\n" + out[-600:]
+        if "not trusted" in out.lower():
+            note += "\n\nRun WOL Agent on the PC once more: it opens Claude to trust the folder."
+    t, kb = machine_view(cfg, i, note)
+    api.edit(chat, mid, t, kb)
 
 
 def vscode_help(cfg, m):
@@ -359,6 +459,19 @@ def handle_callback(api, cfg, cb):
         word = "Restart" if op == "r" else "Shut down"
         kb = [[btn(f"✅ Yes, {word.lower()}", f"{op.upper()}:{i}"), btn("✖️ Cancel", f"s:{i}")]]
         return api.edit(chat, mid, f"{word} {m['name']}?", kb)
+    elif op == "c":
+        rc, out = pc_run(m, actions(m)["claude"])
+        if rc != 0:
+            note = f"🤖 Claude: failed ({out[-200:]}). Run the new WOL Agent on the PC to add it."
+        else:
+            note = "🤖 Starting Claude Remote Control..."
+            threading.Thread(target=claude_wait, args=(api, cfg, chat, mid, i), daemon=True).start()
+    elif op == "k":
+        rc, out = pc_run(m, actions(m)["claude_stop"])
+        note = "⏹ Claude: " + (out[-200:] if rc == 0 else f"failed ({out[-200:]})")
+    elif op == "y":
+        t, kb = relay_view(cfg, i)
+        return api.edit(chat, mid, t, kb)
     elif op == "v":
         return api.edit(chat, mid, vscode_help(cfg, m), [[btn("⬅️ Back", f"s:{i}")]])
     elif op == "d":
@@ -382,6 +495,7 @@ def serve():
     admins = {str(a).lstrip("b") for a in cfg.get("admins", [])}
     offset = 0
     pair_server(api)
+    threading.Thread(target=ip_watch, daemon=True).start()
     print(f"wolbot started ({cfg.get('api', 'bale')}, {len(cfg['machines'])} machines)", flush=True)
     while True:
         try:
@@ -421,8 +535,8 @@ def free_port(cfg):
     return port
 
 
-def pair(cfg, req, client_ip):
-    """Register (or re-register) a PC from a valid one-time code. Returns the agent settings."""
+def take_code(req, client_ip, relay):
+    """Use up a one-time code of the right kind; returns its value. 5 wrong codes per IP per 10 min."""
     code = str(req.get("code", "")).upper().replace(" ", "")
     if len(code) == 8:
         code = f"{code[:4]}-{code[4:]}"
@@ -431,11 +545,18 @@ def pair(cfg, req, client_ip):
         if len(fails) >= 5:
             raise PermissionError("too many wrong codes, try again in 10 min")
         codes = load_codes()
-        if code not in codes:
+        if code not in codes or isinstance(codes[code], dict) != relay:
             FAILS[client_ip] = fails + [time.time()]
-            raise PermissionError("wrong or expired code - press Add PC in the bot for a new one")
-        del codes[code]
+            where = "PC -> Relay" if relay else "Add PC"
+            raise PermissionError(f"wrong or expired code - press {where} in the bot for a new one")
+        val = codes.pop(code)
         save_codes(codes)
+    return val
+
+
+def pair(cfg, req, client_ip):
+    """Register (or re-register) a PC from a valid one-time code. Returns the agent settings."""
+    take_code(req, client_ip, relay=False)
     mac = norm_mac(req["mac"])
     key = " ".join(str(req.get("tunnel_key", "")).split()[:2])
     if not re.match(r"^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+$", key):
@@ -454,13 +575,79 @@ def pair(cfg, req, client_ip):
     m["pc"] = {"port": port, "user": str(req.get("user") or "Administrator"), "tunnel_key": key}
     if not m.get("wake"):
         # any modem: UDP magic packet to its public address (needs a port forward of UDP 9)
-        m["wake"] = [{"type": "udp", "host": req.get("wake_host") or client_ip, "port": 9}]
+        # "auto": ip_watch follows the home IP while the PC is online
+        w = {"type": "udp", "host": req.get("wake_host") or client_ip, "port": 9}
+        if not req.get("wake_host"):
+            w["auto"] = True
+        m["wake"] = [w]
     save(cfg)
     write_tunnel_keys(cfg)
     return m, {
         "ok": True, "name": m["name"], "server": cfg.get("public_host"), "ssh_port": cfg.get("ssh_port", 22),
         "tunnel_user": "woltun", "tunnel_port": port, "bot_key": open(KEY + ".pub").read().strip(),
     }
+
+
+def relay_pair(cfg, req, client_ip):
+    """Register a relay from a one-time relay code and add it as a wake method of its machine."""
+    val = take_code(req, client_ip, relay=True)
+    m = next((x for x in cfg["machines"] if x["name"] == val["relay"]), None)
+    if m is None:
+        raise ValueError("machine of this code was removed")
+    rid = secrets.token_hex(4)
+    r = {"id": rid, "key": secrets.token_urlsafe(24), "name": f"{m['name']}-relay"}
+    cfg.setdefault("relays", []).append(r)
+    m["wake"] = [w for w in m.get("wake", []) if w["type"] != "relay"] + [{"type": "relay", "id": rid}]
+    used = {w["id"] for x in cfg["machines"] for w in x.get("wake", []) if w["type"] == "relay"}
+    cfg["relays"] = [x for x in cfg["relays"] if x["id"] in used]  # drop the replaced relay
+    save(cfg)
+    return m, {"id": rid, "key": r["key"], "name": r["name"], "machine": m["name"]}
+
+
+def relay_poll(cfg, qs):
+    """Long poll from a relay: returns the MACs to wake (waits up to 25 s for a job)."""
+    rid, key = qs.get("id", [""])[0], qs.get("key", [""])[0]
+    r = next((x for x in cfg.get("relays", []) if x["id"] == rid), None)
+    if r is None or not secrets.compare_digest(r["key"], key):
+        raise PermissionError("unknown relay")
+    end = time.time() + 25
+    while True:
+        with LOCK:
+            st = load_relay_state()
+            st["seen"][rid] = time.time()
+            macs = st["queue"].pop(rid, [])
+            save_relay_state(st)
+        if macs or time.time() > end:
+            return {"wake": macs}
+        time.sleep(1)
+
+
+def ip_watch():
+    """Keep "auto" UDP wake targets on the home's current public IP (asked from the PC itself)."""
+    while True:
+        time.sleep(IP_CHECK)
+        try:
+            cfg = load()
+            url = f"http://{cfg.get('public_host')}:{cfg.get('pair_port', 8790)}/ip"
+            for m in cfg["machines"]:
+                auto = [w for w in m.get("wake", []) if w["type"] == "udp" and w.get("auto")]
+                if not auto or not online(m):
+                    continue
+                rc, out = pc_run(m, f"curl -s -m 8 {url}")
+                ip = out.strip()
+                if rc != 0 or not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
+                    continue
+                cfg = load()  # re-read: the bot may have saved meanwhile
+                mm = next((x for x in cfg["machines"] if x["name"] == m["name"]), {})
+                changed = False
+                for w in mm.get("wake", []):
+                    if w["type"] == "udp" and w.get("auto") and w["host"] != ip:
+                        print(f"{mm['name']}: home IP {w['host']} -> {ip}", flush=True)
+                        w["host"], changed = ip, True
+                if changed:
+                    save(cfg)
+        except Exception as e:  # noqa: BLE001 - never let the watcher die
+            print(f"ip_watch: {e}", flush=True)
 
 
 def pair_server(api):
@@ -473,27 +660,55 @@ def pair_server(api):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_GET(self):  # noqa: N802 - http.server API
+            url = urllib.parse.urlsplit(self.path)
+            if url.path == "/ip":  # the PC asks for its own public IP (ip_watch)
+                body = self.client_address[0].encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
+            if url.path == "/relay.py":  # so a phone in Iran can fetch the relay without GitHub
+                body = open(RELAY_SRC, "rb").read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/x-python")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
+            if url.path == "/relay/poll":
+                try:
+                    return self.reply(200, relay_poll(load(), urllib.parse.parse_qs(url.query)))
+                except PermissionError as e:
+                    return self.reply(403, {"error": str(e)})
+            return self.reply(404, {"error": "not found"})
+
         def do_POST(self):  # noqa: N802 - http.server API
-            if self.path != "/pair":
+            if self.path not in ("/pair", "/relay/pair"):
                 return self.reply(404, {"error": "not found"})
+            relay = self.path == "/relay/pair"
             try:
                 n = min(int(self.headers.get("Content-Length", 0)), 8192)
                 req = json.loads(self.rfile.read(n) or b"{}")
                 cfg = load()
-                m, out = pair(cfg, req, self.client_address[0])
+                m, out = (relay_pair if relay else pair)(cfg, req, self.client_address[0])
             except PermissionError as e:
                 return self.reply(403, {"error": str(e)})
             except (ValueError, KeyError) as e:
                 return self.reply(400, {"error": f"bad request: {e}"})
             self.reply(200, out)
+            note = ("✅ Relay linked. Wake now goes through it." if relay
+                    else "✅ New PC paired. It shows online once its tunnel is up.")
             for a in cfg.get("admins", []):
                 try:
-                    t, kb = machine_view(cfg, cfg["machines"].index(m), "✅ New PC paired. It shows online once its tunnel is up.")
+                    t, kb = machine_view(cfg, cfg["machines"].index(m), note)
                     api.send(str(a).lstrip("b"), t, kb)
                 except Exception as e:  # noqa: BLE001
                     print(f"notify {a}: {e}", flush=True)
 
         def log_message(self, fmt, *args):
+            if self.path.startswith("/relay/poll") or self.path == "/ip":  # frequent, and the URL holds the key
+                return
             print(f"pair {self.client_address[0]}: {fmt % args}", flush=True)
 
     cfg = load()
@@ -516,6 +731,7 @@ HELP = """wolbot - Wake-on-LAN bot
   wolbot del <name>                            remove a machine
   wolbot list | wake <name> | status <name>
   wolbot pair-code                             one-time code for WOL Agent.exe (same as Add PC in the bot)
+  wolbot relay-code <name>                     one-time code for relay.py (modem without public IP)
   wolbot pubkey                                key to put on the PC (setup-pc.ps1 -BotKey)
 """
 
@@ -530,6 +746,11 @@ def main(argv):
         cfg = load()
         return print(f"{cfg.get('public_host', '<server>')}:{cfg.get('pair_port', 8790)}/{new_pair_code()}"
                      f"  (one use, {PAIR_TTL // 60} min) - paste it into WOL Agent.exe")
+    if cmd == "relay-code":
+        cfg = load()
+        m = find(cfg, argv[1])
+        return print(f"python relay.py {cfg.get('public_host', '<server>')}:{cfg.get('pair_port', 8790)}/"
+                     f"{new_pair_code(m['name'])}  (one use, {PAIR_TTL // 60} min)")
     if cmd == "help" or cmd not in ("set-token", "admin", "add-pc", "add-wake", "del", "list", "wake", "status"):
         return print(HELP)
     cfg = load()
@@ -561,13 +782,13 @@ def main(argv):
             w = {"type": "udp", "host": argv[3], "port": int(argv[4]) if len(argv) > 4 else 9}
         else:
             raise SystemExit("type must be ssh or udp")
-        m["wake"] = [x for x in m.get("wake", []) if not (x["type"] == w["type"] and x["host"] == w["host"])]
+        m["wake"] = [x for x in m.get("wake", []) if not (x["type"] == w["type"] and x.get("host") == w["host"])]
         m["wake"].append(w)
     elif cmd == "del":
         cfg["machines"] = [x for x in cfg["machines"] if x["name"].lower() != argv[1].lower()]
     elif cmd == "list":
         for m in cfg["machines"]:
-            print(f"{m['name']}  {m['mac']}  {status_line(m)}  wake={[w['type'] + ':' + w['host'] for w in m.get('wake', [])]}"
+            print(f"{m['name']}  {m['mac']}  {status_line(m)}  wake={[w['type'] + ':' + w.get('host', w.get('id', '')) for w in m.get('wake', [])]}"
                   + (f"  tunnel=127.0.0.1:{m['pc']['port']}" if m.get("pc") else ""))
         return None
     elif cmd == "wake":

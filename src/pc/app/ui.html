@@ -30,6 +30,8 @@ button.pri{background:var(--acc);border-color:var(--acc)}
 button.danger{border-color:var(--bad);color:var(--bad)}
 button:disabled{opacity:.5;cursor:default}
 .chk{display:flex;align-items:center;gap:8px;margin-top:12px}
+details{margin-top:14px;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+summary{cursor:pointer;color:var(--mut);font-weight:600}
 pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:12px;min-height:220px;max-height:420px;overflow:auto;direction:ltr;text-align:left;font:13px/1.5 Consolas,monospace;white-space:pre-wrap;margin:0}
 ol{margin:12px 0 0;padding-inline-start:20px} li{margin:6px 0}
 .lead{font-size:16px;font-weight:600;margin-bottom:10px}
@@ -65,13 +67,19 @@ a{color:var(--acc)}
     <label for="name" data-t="name"></label>
     <input type="text" id="name">
     <div class="help" data-t="nameHelp"></div>
-    <label for="wake" data-t="wake"></label>
-    <input type="text" id="wake" placeholder="myhome.ddns.net">
-    <div class="help" data-t="wakeHelp"></div>
-    <label for="xkey" data-t="xkey"></label>
-    <textarea id="xkey" placeholder="ssh-ed25519 AAAA... laptop"></textarea>
-    <div class="help" data-t="xkeyHelp"></div>
+    <label for="cdir" data-t="cdir"></label>
+    <input type="text" id="cdir">
+    <div class="help" data-t="cdirHelp"></div>
     <div class="chk"><input type="checkbox" id="lock" checked><label for="lock" style="margin:0;font-weight:400" data-t="lock"></label></div>
+    <details>
+      <summary data-t="adv"></summary>
+      <label for="wake" data-t="wake"></label>
+      <input type="text" id="wake" placeholder="myhome.ddns.net">
+      <div class="help" data-t="wakeHelp"></div>
+      <label for="xkey" data-t="xkey"></label>
+      <textarea id="xkey" placeholder="ssh-ed25519 AAAA... laptop"></textarea>
+      <div class="help" data-t="xkeyHelp"></div>
+    </details>
     <div class="row">
       <button class="pri" id="install" data-t="install"></button>
       <button class="danger" id="uninstall" data-t="uninstall"></button>
@@ -107,8 +115,10 @@ const L={
  fa:{title:"WOL Agent — روشن کردن و کنترل سیستم از راه دور",subtitle:"این سیستم را به بات وصل کن: کد را از بات (➕ Add PC) بگیر و نصب را بزن.",
   sys:"این سیستم",refresh:"بررسی دوباره",pair:"اتصال به بات",code:"کد اتصال",codeHelp:"در بات بزن ➕ Add PC و کدی که می‌دهد را اینجا بچسبان. یک‌بار مصرف است و ۱۵ دقیقه اعتبار دارد.",
   name:"اسم سیستم",nameHelp:"اسمی که در بات نشان داده می‌شود (فقط حروف انگلیسی، عدد، - و _).",
-  wake:"آدرس مودم برای Wake (اختیاری)",wakeHelp:"اگر مودمت آی‌پی ثابت یا DDNS دارد اینجا بنویس. خالی = آی‌پی فعلی اینترنتت. روی مودم پورت UDP 9 را به آی‌پی این سیستم فوروارد کن.",
-  xkey:"کلید لپ‌تاپ برای VS Code (اختیاری)",xkeyHelp:"محتوای فایل id_ed25519.pub لپ‌تاپ؛ برای اتصال Remote-SSH از بیرون.",
+  cdir:"پوشه‌ی کار Claude",cdirHelp:"دکمه‌ی 🤖 Claude Remote در بات، Claude Code را در این پوشه روشن می‌کند؛ بعد از اپ Claude گوشی یا سایت claude.ai/code ادامه می‌دهی. بار اول یک پنجره باز می‌شود: Enter بزن (یعنی به این پوشه اعتماد دارم) و بعد بنویس ‎/exit.",
+  adv:"تنظیمات پیشرفته (اختیاری) — اگر نمی‌دانی چیست، دست نزن",
+  wake:"آدرس مودم",wakeHelp:"خالی بگذار؛ آی‌پی اینترنتت خودکار پیدا و به‌روز می‌شود. فقط اگر DDNS داری اینجا بنویس. اینترنت TD-LTE / ۴G: این روش کار نمی‌کند، در بات «📡 Relay» را بزن.",
+  xkey:"کلید لپ‌تاپ (فقط برای VS Code از لپ‌تاپ دیگر)",xkeyHelp:"لازم نیست. فقط اگر می‌خواهی از یک لپ‌تاپ دیگر با VS Code به همین کامپیوتر وصل شوی، محتوای فایل id_ed25519.pub آن لپ‌تاپ را اینجا بچسبان. برای Claude از راه دور لازم نیست.",
   lock:"بعد از ورود خودکار، صفحه فوراً قفل شود",install:"نصب و اتصال",uninstall:"حذف از این سیستم",
   manual:"راهنما — چطور کار می‌کند؟",
   lead:"از توی گوشی، با بات، کامپیوترت را روشن می‌کنی و برنامه‌هایش را باز می‌کنی.",
@@ -119,16 +129,18 @@ const L={
   m2:"<b>کابل:</b> کامپیوتر باید با کابل شبکه به مودم وصل باشد. Wi-Fi برای روشن کردن کار نمی‌کند.",
   m3:"<b>اتصال:</b> در بات بزن ➕ Add PC، کد را در کادر «کد اتصال» بچسبان و «نصب و اتصال» را بزن.",
   m4:"<b>ورود خودکار ویندوز (یک‌بار):</b> برنامه‌ی <a href='https://learn.microsoft.com/sysinternals/downloads/autologon' target='_blank'>Autologon</a> را اجرا کن، رمز ویندوز را بده و Enable بزن. ویندوز خودش وارد می‌شود و فوراً قفل می‌شود، پس امن است.",
-  m5:"<b>مودم:</b> اگر روتر OpenWrt نداری، در تنظیمات مودم پورت UDP 9 را به آی‌پی این کامپیوتر فوروارد کن و آن آی‌پی را رزرو (DHCP reservation) کن.",
-  m6:"<b>تست:</b> کامپیوتر را خاموش کن و از گوشی در بات Wake را بزن. دکمه‌های دیگر: v2rayN و VS Code (اجرا)، Lock (قفل)، Shut down (خاموش).",
+  m5:"<b>مودم:</b> اینترنت TD-LTE / ۴G یا آی‌پی که مدام عوض می‌شود؟ در بات روی این کامپیوتر بزن <b>📡 Relay</b> و یک گوشی قدیمی همیشه‌روشن روی Wi-Fi همین خانه را رله کن (مودم تنظیم نمی‌خواهد). وگرنه در مودم پورت UDP 9 را به آی‌پی این کامپیوتر فوروارد و آن آی‌پی را رزرو کن.",
+  m6:"<b>تست:</b> کامپیوتر را خاموش کن و از گوشی در بات Wake را بزن. بعد 🤖 Claude Remote را بزن و از اپ Claude ادامه بده. دکمه‌های دیگر: v2rayN، Lock (قفل)، Shut down (خاموش).",
   more:"کامپیوتر دیگری داری؟ همین برنامه را روی آن هم اجرا کن و با یک کد تازه از بات وصلش کن.",
   log:"گزارش",yes:"بله",no:"خیر",running:"در حال اجرا…",needCode:"اول کد اتصال را وارد کن.",confirmUn:"همه‌ی تنظیمات WOL Agent از این سیستم حذف شود؟",
-  k:{name:"اسم",user:"کاربر",os:"ویندوز",board:"مادربرد",nic:"کارت شبکه",mac:"MAC",link:"لینک",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",sshd:"OpenSSH Server",paired:"وصل به بات",tunnel:"تونل"}},
+  k:{name:"اسم",user:"کاربر",os:"ویندوز",board:"مادربرد",nic:"کارت شبکه",mac:"MAC",link:"لینک",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",claude:"Claude Code",sshd:"OpenSSH Server",paired:"وصل به بات",tunnel:"تونل"}},
  en:{title:"WOL Agent — wake and control this PC remotely",subtitle:"Link this PC to the bot: get a code from the bot (➕ Add PC) and press Install.",
   sys:"This PC",refresh:"Check again",pair:"Link to the bot",code:"Pair code",codeHelp:"In the bot press ➕ Add PC and paste the code here. One use, valid 15 minutes.",
   name:"PC name",nameHelp:"Shown in the bot (letters, digits, - and _).",
-  wake:"Modem address for Wake (optional)",wakeHelp:"Static IP or DDNS name of your modem. Empty = your current internet IP. Forward UDP port 9 on the modem to this PC.",
-  xkey:"Laptop key for VS Code (optional)",xkeyHelp:"Content of the laptop's id_ed25519.pub, for Remote-SSH from outside.",
+  cdir:"Claude work folder",cdirHelp:"The bot's 🤖 Claude Remote button starts Claude Code in this folder; you continue from the Claude app or claude.ai/code. The first time a window opens: press Enter (trust this folder), then type /exit.",
+  adv:"Advanced (optional) — leave it if you are not sure",
+  wake:"Modem address",wakeHelp:"Leave empty: your internet IP is found and kept up to date. Only for a DDNS name. TD-LTE / 4G: this does not work, press “📡 Relay” in the bot instead.",
+  xkey:"Laptop key (only for VS Code from another laptop)",xkeyHelp:"Not needed. Only to open this PC in VS Code from another laptop: paste that laptop's id_ed25519.pub. Not needed for Claude Remote.",
   lock:"Lock the screen right after auto-logon",install:"Install & link",uninstall:"Remove from this PC",
   manual:"Guide — how does it work?",
   lead:"From your phone, through the bot, you turn this PC on and open its apps.",
@@ -139,11 +151,11 @@ const L={
   m2:"<b>Cable:</b> the PC must be wired to the modem. Wake does not work over Wi-Fi.",
   m3:"<b>Link:</b> in the bot press ➕ Add PC, paste the code into “Pair code” and press “Install & link”.",
   m4:"<b>Windows auto-logon (once):</b> run <a href='https://learn.microsoft.com/sysinternals/downloads/autologon' target='_blank'>Autologon</a>, enter the Windows password, press Enable. Windows signs in and locks right away, so it stays safe.",
-  m5:"<b>Modem:</b> without an OpenWrt router, forward UDP port 9 to this PC's IP in the modem settings and reserve that IP (DHCP reservation).",
-  m6:"<b>Test:</b> shut the PC down and press Wake in the bot. Other buttons: v2rayN and VS Code (start), Lock, Shut down.",
+  m5:"<b>Modem:</b> TD-LTE / 4G, or an IP that keeps changing? In the bot press <b>📡 Relay</b> on this PC and make an old always-on phone on the home Wi-Fi the relay (no modem setup). Otherwise forward UDP port 9 to this PC's IP and reserve that IP.",
+  m6:"<b>Test:</b> shut the PC down and press Wake in the bot. Then press 🤖 Claude Remote and continue in the Claude app. Other buttons: v2rayN, Lock, Shut down.",
   more:"Another PC? Run this app there too and link it with a fresh code from the bot.",
   log:"Log",yes:"yes",no:"no",running:"Running…",needCode:"Enter the pair code first.",confirmUn:"Remove all WOL Agent settings from this PC?",
-  k:{name:"Name",user:"User",os:"Windows",board:"Board",nic:"Network card",mac:"MAC",link:"Link",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",sshd:"OpenSSH Server",paired:"Linked to bot",tunnel:"Tunnel"}}
+  k:{name:"Name",user:"User",os:"Windows",board:"Board",nic:"Network card",mac:"MAC",link:"Link",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",claude:"Claude Code",sshd:"OpenSSH Server",paired:"Linked to bot",tunnel:"Tunnel"}}
 };
 let lang=localStorage.getItem("lang")||"fa", info=null;
 const $=id=>document.getElementById(id);
@@ -167,7 +179,7 @@ function renderSys(){
 }
 async function detect(){
   $("sys").innerHTML=`<dt>${L[lang].running}</dt><dd></dd>`;
-  try{info=await (await fetch("/api/detect")).json();if(!$("name").value)$("name").value=info.name;renderSys();}
+  try{info=await (await fetch("/api/detect")).json();if(!$("name").value)$("name").value=info.name;if(!$("cdir").value)$("cdir").value=info.claudeDir||"";renderSys();}
   catch(e){$("sys").innerHTML=`<dt class="bad">Error</dt><dd>${e}</dd>`;}
 }
 async function run(body){
@@ -180,7 +192,7 @@ async function run(body){
   $("install").disabled=$("uninstall").disabled=false;detect();
 }
 $("install").onclick=()=>{const code=$("code").value.trim();if(!code){alert(L[lang].needCode);return;}
-  run({action:"install",code,name:$("name").value.trim(),wakeHost:$("wake").value.trim(),extraKey:$("xkey").value.trim(),noLock:!$("lock").checked});};
+  run({action:"install",code,name:$("name").value.trim(),wakeHost:$("wake").value.trim(),extraKey:$("xkey").value.trim(),claudeDir:$("cdir").value.trim(),noLock:!$("lock").checked});};
 $("uninstall").onclick=()=>{if(confirm(L[lang].confirmUn))run({action:"uninstall"});};
 $("refresh").onclick=detect;
 $("lang").onclick=()=>{lang=lang=="fa"?"en":"fa";try{localStorage.setItem("lang",lang)}catch(e){};tr();};

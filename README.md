@@ -44,21 +44,32 @@ sudo bash install.sh --token <BOT_TOKEN> --public-host <server IP or domain>
 3. Windows auto-logon (so apps can start after a wake): [Sysinternals Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon). The agent locks the screen right after logon.
 
 **3. Modem** — pick one:
-- **Any modem:** forward **UDP 9** to the PC's IP and reserve that IP in DHCP. The bot sends the packet to your public IP (or DDNS name set in the app).
+- **No public IP (TD-LTE, 4G, CGNAT) or a changing IP → relay.** Any always-on device in the same home network (old Android phone with [Termux](https://f-droid.org/packages/com.termux/), Raspberry Pi, another PC) runs `relay.py`. It asks the server for wake jobs over outgoing HTTP and sends the packet inside the home. No modem setup. In the bot: PC → **📡 Relay**, then on the phone:
+  ```
+  pkg install python
+  curl -O http://<server>:8790/relay.py
+  python relay.py <server>:8790/<CODE>
+  ```
+  In Termux tap **Acquire wakelock** in its notification and keep the phone charging.
+- **Public IP:** forward **UDP 9** to the PC's IP and reserve that IP in DHCP. The bot follows your home IP automatically while the PC is on (or set a DDNS name in the app).
 - **OpenWrt / Linux box at home:** `wolbot add-wake <PC> ssh <host> <port> root br-lan` (needs `etherwake`).
 
-> Many cheap modems forget the PC's address a few minutes after it shuts down and then drop the UDP packet. If waking fails only after a long time off, use the OpenWrt/Linux method or a modem with static ARP.
+> Many cheap modems forget the PC's address a few minutes after it shuts down and then drop the UDP packet. If waking fails only after a long time off, use a relay.
 
 ### Server commands
 ```
 wolbot list | wake <name> | status <name> | pair-code | del <name>
 wolbot add-wake <name> udp <host> [port]
 wolbot add-wake <name> ssh <host> <port> <user> [iface]
+wolbot relay-code <name>
 ```
 Config: `/etc/wol-bot/config.json`. Service: `systemctl status wol-bot`. Uninstall: `bash install.sh --uninstall`.
 
-### VS Code Remote-SSH
-Paste your laptop's `id_ed25519.pub` into the app (“Laptop key”), then the bot button **VS Code Remote-SSH** shows the `~/.ssh/config` block (ProxyJump through your server).
+### Claude Code from your phone
+Bot button **🤖 Claude Remote** starts `claude remote-control` on the PC (in the folder chosen in the app; Claude Code CLI or the VS Code extension must be installed and signed in). Continue in the Claude app or at claude.ai/code. The first install opens Claude once so you can trust that folder. **⏹ Stop Claude** ends it.
+
+### VS Code Remote-SSH (optional)
+Only for opening the PC in VS Code from another laptop. Paste your laptop's `id_ed25519.pub` into the app (“Laptop key”), then the bot button **VS Code Remote-SSH** shows the `~/.ssh/config` block (ProxyJump through your server).
 
 ### Build the app
 ```
@@ -107,13 +118,17 @@ sudo bash install.sh --token <توکن-بات> --public-host <آی‌پی-سرو
 2. در بات بزن **➕ Add PC**، برنامه‌ی **WOL Agent.exe** را اجرا کن، کد را بچسبان و «نصب و اتصال» را بزن.
 3. ورود خودکار ویندوز با [Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon). صفحه بلافاصله قفل می‌شود.
 
-**۳. مودم — یکی از این دو:**
-- **هر مودمی:** پورت **UDP 9** را به آی‌پی کامپیوتر فوروارد کن و آن آی‌پی را رزرو کن.
+**۳. مودم — یکی از این‌ها:**
+- **اینترنت TD-LTE / ۴G یا آی‌پی که مدام عوض می‌شود ← رله.** یک دستگاه همیشه‌روشن در همان خانه (گوشی اندرویدی قدیمی با [Termux](https://f-droid.org/packages/com.termux/)، رزبری‌پای یا یک کامپیوتر دیگر) بسته‌ی روشن‌کردن را از داخل خانه می‌فرستد. مودم تنظیم نمی‌خواهد. در بات روی کامپیوتر بزن **📡 Relay** و دستورهایی که می‌دهد را در Termux بزن. بعد در اعلان Termux «Acquire wakelock» را بزن و گوشی را به شارژ بزن.
+- **آی‌پی عمومی:** پورت **UDP 9** را به آی‌پی کامپیوتر فوروارد کن و آن آی‌پی را رزرو کن. اگر آی‌پی عوض شود، بات خودش (وقتی کامپیوتر روشن است) به‌روزش می‌کند.
 - **OpenWrt:** `wolbot add-wake <اسم> ssh <آدرس> <پورت> root br-lan`
 
-> بعضی مودم‌ها چند دقیقه بعد از خاموش شدن کامپیوتر آدرسش را فراموش می‌کنند. اگر بعد از مدت طولانی روشن نشد، روش OpenWrt را استفاده کن.
+> بعضی مودم‌ها چند دقیقه بعد از خاموش شدن کامپیوتر آدرسش را فراموش می‌کنند. اگر بعد از مدت طولانی روشن نشد، از رله استفاده کن.
+
+### Claude از توی گوشی
+دکمه‌ی **🤖 Claude Remote** در بات، Claude Code را روی کامپیوتر روشن می‌کند. بعد از اپ Claude یا سایت claude.ai/code ادامه می‌دهی (Claude Code یا افزونه‌ی VS Code آن باید نصب و وارد حساب شده باشد). بار اول برنامه یک پنجره‌ی Claude باز می‌کند: Enter بزن تا به پوشه اعتماد کند.
 
 ### استفاده
-در بات: ⚡ Wake (روشن) · ▶️ v2rayN / VS Code (اجرا) · 🔒 Lock (قفل) · ⏻ Shut down (خاموش) · ➕ Add PC (کامپیوتر جدید)
+در بات: ⚡ Wake (روشن) · 🤖 Claude Remote · ▶️ v2rayN / VS Code (اجرا) · 🔒 Lock (قفل) · ⏻ Shut down (خاموش) · 📡 Relay · ➕ Add PC (کامپیوتر جدید)
 
 </div>

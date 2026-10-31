@@ -114,12 +114,13 @@ func ps(args ...string) *exec.Cmd {
 }
 
 type runReq struct {
-	Action   string `json:"action"` // install | uninstall
-	Code     string `json:"code"`
-	Name     string `json:"name"`
-	WakeHost string `json:"wakeHost"`
-	ExtraKey string `json:"extraKey"`
-	NoLock   bool   `json:"noLock"`
+	Action    string `json:"action"` // install | uninstall
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	WakeHost  string `json:"wakeHost"`
+	ExtraKey  string `json:"extraKey"`
+	ClaudeDir string `json:"claudeDir"`
+	NoLock    bool   `json:"noLock"`
 }
 
 // runHandler streams the script output to the page as plain text.
@@ -149,6 +150,9 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.TrimSpace(req.ExtraKey) != "" {
 			args = append(args, "-ExtraKey", strings.TrimSpace(req.ExtraKey))
+		}
+		if strings.TrimSpace(req.ClaudeDir) != "" {
+			args = append(args, "-ClaudeDir", strings.TrimSpace(req.ClaudeDir))
 		}
 		if req.NoLock {
 			args = append(args, "-NoLockAtLogon")

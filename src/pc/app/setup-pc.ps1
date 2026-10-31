@@ -5,6 +5,7 @@
   Options:
     -Name PC  -WakeHost <modem DDNS/IP for UDP wake>  -ExtraKey "<laptop pubkey for VS Code Remote-SSH>"
     -V2rayN <path>  -VSCode <path>  -NoLockAtLogon  -Detect (print system info as JSON)  -Uninstall
+    -ClaudeDir <folder>  (where the bot's "Claude Remote" button starts Claude Code; default Documents)
 #>
 param(
   [string]$PairCode,
@@ -18,6 +19,7 @@ param(
   [string[]]$ExtraKey = @(),
   [string]$V2rayN,
   [string]$VSCode,
+  [string]$ClaudeDir,
   [switch]$NoLockAtLogon,
   [switch]$Detect,
   [switch]$Uninstall
@@ -43,10 +45,36 @@ function Find-V2rayN {
 function Find-VSCode {
   @("$env:LOCALAPPDATA\Programs\Microsoft VS Code\Code.exe", "$env:ProgramFiles\Microsoft VS Code\Code.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
+# Same lookup is copied into wol-claude.ps1, so a VS Code extension update (new folder) is still found.
+$FindClaude = @'
+function Find-Claude {
+  $c = Get-Command claude.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+  if (-not $c -and (Test-Path "$env:USERPROFILE\.local\bin\claude.exe")) { $c = "$env:USERPROFILE\.local\bin\claude.exe" }
+  if (-not $c) {
+    $c = Get-ChildItem "$env:USERPROFILE\.vscode\extensions\anthropic.claude-code-*\resources\native-binary\claude.exe" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+  }
+  $c
+}
+'@
+. ([scriptblock]::Create($FindClaude))
+# Claude Code asks once per folder whether to trust it; remote-control refuses untrusted folders.
+function Test-ClaudeTrust($dir) {
+  try { $j = Get-Content "$env:USERPROFILE\.claude.json" -Raw | ConvertFrom-Json } catch { return $false }
+  if (-not $j.projects) { return $false }
+  $d = ($dir -replace '\\', '/').TrimEnd('/').ToLower()
+  foreach ($p in $j.projects.PSObject.Properties) {
+    $k = ($p.Name -replace '\\', '/').TrimEnd('/').ToLower()
+    if ($p.Value.hasTrustDialogAccepted -and ($d -eq $k -or $d.StartsWith("$k/"))) { return $true }
+  }
+  $false
+}
+
+$conf = if (Test-Path "$Agent\agent.json") { Get-Content "$Agent\agent.json" -Raw | ConvertFrom-Json } else { $null }
+if (-not $ClaudeDir) { $ClaudeDir = if ($conf -and $conf.claude_dir) { $conf.claude_dir } else { [Environment]::GetFolderPath("MyDocuments") } }
 
 if ($Detect) {
   $nic = Find-Nic
-  $conf = if (Test-Path "$Agent\agent.json") { Get-Content "$Agent\agent.json" -Raw | ConvertFrom-Json } else { $null }
   $tunnel = Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" | Where-Object { $_.CommandLine -match "wol-agent" }
   [ordered]@{
     name    = $env:COMPUTERNAME
@@ -59,6 +87,8 @@ if ($Detect) {
     wol     = if ($nic) { "$((Get-NetAdapterPowerManagement -Name $nic.Name).WakeOnMagicPacket)" } else { "" }
     v2rayn  = "$(if ($V2rayN) { $V2rayN } else { Find-V2rayN })"
     vscode  = "$(Find-VSCode)"
+    claude  = "$(Find-Claude)"
+    claudeDir = $ClaudeDir
     sshd    = "$((Get-Service sshd -ErrorAction SilentlyContinue).Status)"
     paired  = [bool]$conf
     server  = if ($conf) { "$($conf.server)" } else { "" }
@@ -117,7 +147,7 @@ if ($PairCode) {
   Write-Host "[3/7] Manual mode (no pair code)"
   if (-not $Server -or -not $BotKey) { Write-Host "  Need -PairCode, or -Server and -BotKey" -ForegroundColor Red; exit 1 }
 }
-@{ server = $Server; ssh_port = $ServerPort; tunnel_user = $TunnelUser; tunnel_port = $TunnelPort; name = $Name } | ConvertTo-Json | Set-Content "$Agent\agent.json" -Encoding utf8
+@{ server = $Server; ssh_port = $ServerPort; tunnel_user = $TunnelUser; tunnel_port = $TunnelPort; name = $Name; claude_dir = $ClaudeDir } | ConvertTo-Json | Set-Content "$Agent\agent.json" -Encoding utf8
 
 Write-Host "[4/7] OpenSSH Server + bot key"
 if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
@@ -170,6 +200,42 @@ if (-not $VSCode) { $VSCode = Find-VSCode }
 Add-AppTask "v2rayN" $V2rayN
 Add-AppTask "VSCode" $VSCode
 Add-AppTask "Lock" "$env:WINDIR\System32\rundll32.exe" "user32.dll,LockWorkStation"
+
+# Claude Code Remote Control: the bot starts it, then you continue from the Claude app / claude.ai/code
+@"
+# Starts Claude Code Remote Control in '$ClaudeDir' (task WOL\Claude). -Status prints its log, -Stop ends it.
+param([switch]`$Status, [switch]`$Stop)
+`$log = '$Agent\claude.log'
+`$procs = @(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Where-Object { `$_.CommandLine -match 'remote-control' })
+if (`$Stop) { `$procs | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }; "stopped (`$(`$procs.Count) process)"; exit 0 }
+if (`$Status) {
+  if (`$procs.Count) { 'running' } else { 'not running' }
+  foreach (`$f in `$log, "`$log.err") { if (Test-Path `$f) { Get-Content `$f -Tail 25 } }
+  exit 0
+}
+if (`$procs.Count) { exit 0 }
+$FindClaude
+`$exe = Find-Claude
+if (-not `$exe) { 'error: Claude Code not found on this PC (install the VS Code extension or the CLI)' | Set-Content `$log; exit 1 }
+Remove-Item `$log, "`$log.err" -ErrorAction SilentlyContinue
+Start-Process -FilePath `$exe -ArgumentList 'remote-control', '--name', '$Name' -WorkingDirectory '$ClaudeDir' ``
+  -RedirectStandardOutput `$log -RedirectStandardError "`$log.err" -WindowStyle Hidden
+"@ | Set-Content -Path "$Agent\wol-claude.ps1" -Encoding utf8
+$act = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Agent\wol-claude.ps1`""
+Register-ScheduledTask -TaskPath "\WOL\" -TaskName "Claude" -Action $act -Principal $me -Settings $set -Force | Out-Null
+$claude = Find-Claude
+if (-not $claude) {
+  Write-Host "  Claude task added, but Claude Code is not installed yet" -ForegroundColor Yellow
+} else {
+  if (-not (Test-Path $ClaudeDir)) { New-Item -ItemType Directory -Path $ClaudeDir -Force | Out-Null }
+  Write-Host "  Claude -> remote-control in $ClaudeDir"
+  if (-not (Test-ClaudeTrust $ClaudeDir)) {
+    # one time: Claude asks "trust this folder?" - the bot cannot answer that, so ask now
+    $cmd = "Set-Location -LiteralPath '$ClaudeDir'; Write-Host 'WOL Agent: press Enter to trust this folder, then type /exit and close this window.' -ForegroundColor Cyan; & '$claude'"
+    Start-Process powershell.exe -ArgumentList "-NoProfile", "-EncodedCommand", ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd)))
+    Write-Host "  A Claude window opened: press Enter there to trust the folder (once), then /exit" -ForegroundColor Cyan
+  }
+}
 if (-not $NoLockAtLogon) {
   $lock = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\rundll32.exe" -Argument "user32.dll,LockWorkStation"
   Register-ScheduledTask -TaskPath "\WOL\" -TaskName "LockAtLogon" -Action $lock -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $User) -Principal $me -Settings $set -Force | Out-Null
