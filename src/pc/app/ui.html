@@ -82,6 +82,7 @@ a{color:var(--acc)}
     </details>
     <div class="row">
       <button class="pri" id="install" data-t="install"></button>
+      <button id="csetup" data-t="csetup"></button>
       <button class="danger" id="uninstall" data-t="uninstall"></button>
     </div>
   </section>
@@ -119,7 +120,7 @@ const L={
   adv:"تنظیمات پیشرفته (اختیاری) — اگر نمی‌دانی چیست، دست نزن",
   wake:"آدرس مودم",wakeHelp:"خالی بگذار؛ آی‌پی اینترنتت خودکار پیدا و به‌روز می‌شود. فقط اگر DDNS داری اینجا بنویس. اینترنت TD-LTE / ۴G: این روش کار نمی‌کند، در بات «📡 Relay» را بزن.",
   xkey:"کلید لپ‌تاپ (فقط برای VS Code از لپ‌تاپ دیگر)",xkeyHelp:"لازم نیست. فقط اگر می‌خواهی از یک لپ‌تاپ دیگر با VS Code به همین کامپیوتر وصل شوی، محتوای فایل id_ed25519.pub آن لپ‌تاپ را اینجا بچسبان. برای Claude از راه دور لازم نیست.",
-  lock:"بعد از ورود خودکار، صفحه فوراً قفل شود",install:"نصب و اتصال",uninstall:"حذف از این سیستم",
+  lock:"بعد از ورود خودکار، صفحه فوراً قفل شود",install:"نصب و اتصال",csetup:"🤖 راه‌اندازی یک‌باره‌ی Claude",uninstall:"حذف از این سیستم",
   manual:"راهنما — چطور کار می‌کند؟",
   lead:"از توی گوشی، با بات، کامپیوترت را روشن می‌کنی و برنامه‌هایش را باز می‌کنی.",
   p1:"<b>بات</b> = ریموت کنترل توی گوشی (بله یا تلگرام)",
@@ -141,7 +142,7 @@ const L={
   adv:"Advanced (optional) — leave it if you are not sure",
   wake:"Modem address",wakeHelp:"Leave empty: your internet IP is found and kept up to date. Only for a DDNS name. TD-LTE / 4G: this does not work, press “📡 Relay” in the bot instead.",
   xkey:"Laptop key (only for VS Code from another laptop)",xkeyHelp:"Not needed. Only to open this PC in VS Code from another laptop: paste that laptop's id_ed25519.pub. Not needed for Claude Remote.",
-  lock:"Lock the screen right after auto-logon",install:"Install & link",uninstall:"Remove from this PC",
+  lock:"Lock the screen right after auto-logon",install:"Install & link",csetup:"🤖 Claude one-time setup",uninstall:"Remove from this PC",
   manual:"Guide — how does it work?",
   lead:"From your phone, through the bot, you turn this PC on and open its apps.",
   p1:"<b>Bot</b> = the remote control on your phone (Bale or Telegram)",
@@ -193,6 +194,7 @@ async function run(body){
 }
 $("install").onclick=()=>{const code=$("code").value.trim();if(!code){alert(L[lang].needCode);return;}
   run({action:"install",code,name:$("name").value.trim(),wakeHost:$("wake").value.trim(),extraKey:$("xkey").value.trim(),claudeDir:$("cdir").value.trim(),noLock:!$("lock").checked});};
+$("csetup").onclick=()=>run({action:"claude-setup"});
 $("uninstall").onclick=()=>{if(confirm(L[lang].confirmUn))run({action:"uninstall"});};
 $("refresh").onclick=detect;
 $("lang").onclick=()=>{lang=lang=="fa"?"en":"fa";try{localStorage.setItem("lang",lang)}catch(e){};tr();};

@@ -138,6 +138,21 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 
 	var args []string
 	switch req.Action {
+	case "claude-setup":
+		// visible window: the user answers Claude's one-time questions there
+		f := filepath.Join(os.Getenv("ProgramData"), "wol-agent", "wol-claude.ps1")
+		if _, err := os.Stat(f); err != nil {
+			fmt.Fprint(w, "Install & link first.\n__EXIT__ 1\n")
+			return
+		}
+		err := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", f, "-Setup").Start()
+		if err != nil {
+			fmt.Fprintf(w, "ERROR: %v\n__EXIT__ 1\n", err)
+			return
+		}
+		fmt.Fprint(w, "A Claude window opened: press Enter if it asks to trust the folder, then type /exit;\n"+
+			"press y if it asks \"Enable Remote Control?\". Then close that window.\n__EXIT__ 0\n")
+		return
 	case "uninstall":
 		args = []string{"-Uninstall"}
 	case "install":

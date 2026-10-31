@@ -57,7 +57,7 @@ function Find-Claude {
   $c
 }
 '@
-. ([scriptblock]::Create($FindClaude))
+$FindClaude += @'
 # Claude Code asks once per folder whether to trust it; remote-control refuses untrusted folders.
 function Test-ClaudeTrust($dir) {
   try { $j = Get-Content "$env:USERPROFILE\.claude.json" -Raw | ConvertFrom-Json } catch { return $false }
@@ -69,6 +69,8 @@ function Test-ClaudeTrust($dir) {
   }
   $false
 }
+'@
+. ([scriptblock]::Create($FindClaude))
 
 $conf = if (Test-Path "$Agent\agent.json") { Get-Content "$Agent\agent.json" -Raw | ConvertFrom-Json } else { $null }
 if (-not $ClaudeDir) { $ClaudeDir = if ($conf -and $conf.claude_dir) { $conf.claude_dir } else { [Environment]::GetFolderPath("MyDocuments") } }
@@ -203,8 +205,9 @@ Add-AppTask "Lock" "$env:WINDIR\System32\rundll32.exe" "user32.dll,LockWorkStati
 
 # Claude Code Remote Control: the bot starts it, then you continue from the Claude app / claude.ai/code
 @"
-# Starts Claude Code Remote Control in '$ClaudeDir' (task WOL\Claude). -Status prints its log, -Stop ends it.
-param([switch]`$Status, [switch]`$Stop)
+# Starts Claude Code Remote Control in '$ClaudeDir' (task WOL\Claude). -Status prints its log, -Stop ends it,
+# -Setup = the one-time questions (trust the folder, enable Remote Control) in a visible window.
+param([switch]`$Status, [switch]`$Stop, [switch]`$Setup)
 `$log = '$Agent\claude.log'
 `$procs = @(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Where-Object { `$_.CommandLine -match 'remote-control' })
 if (`$Stop) { `$procs | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }; "stopped (`$(`$procs.Count) process)"; exit 0 }
@@ -213,9 +216,21 @@ if (`$Status) {
   foreach (`$f in `$log, "`$log.err") { if (Test-Path `$f) { Get-Content `$f -Tail 25 } }
   exit 0
 }
-if (`$procs.Count) { exit 0 }
 $FindClaude
 `$exe = Find-Claude
+if (`$Setup) {
+  `$procs | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }
+  if (-not `$exe) { Write-Host 'Claude Code is not installed on this PC.' -ForegroundColor Red; exit 1 }
+  Set-Location -LiteralPath '$ClaudeDir'
+  if (-not (Test-ClaudeTrust '$ClaudeDir')) {
+    Write-Host 'Step 1 of 2: Claude asks whether you trust this folder - press Enter, then type /exit' -ForegroundColor Cyan
+    & `$exe
+  }
+  Write-Host 'Step 2 of 2: if it asks "Enable Remote Control? (y/n)" press y. When it shows the session, close this window.' -ForegroundColor Cyan
+  & `$exe remote-control --name '$Name'
+  exit 0
+}
+if (`$procs.Count) { exit 0 }
 if (-not `$exe) { 'error: Claude Code not found on this PC (install the VS Code extension or the CLI)' | Set-Content `$log; exit 1 }
 Remove-Item `$log, "`$log.err" -ErrorAction SilentlyContinue
 Start-Process -FilePath `$exe -ArgumentList 'remote-control', '--name', '$Name' -WorkingDirectory '$ClaudeDir' ``
@@ -229,12 +244,9 @@ if (-not $claude) {
 } else {
   if (-not (Test-Path $ClaudeDir)) { New-Item -ItemType Directory -Path $ClaudeDir -Force | Out-Null }
   Write-Host "  Claude -> remote-control in $ClaudeDir"
-  if (-not (Test-ClaudeTrust $ClaudeDir)) {
-    # one time: Claude asks "trust this folder?" - the bot cannot answer that, so ask now
-    $cmd = "Set-Location -LiteralPath '$ClaudeDir'; Write-Host 'WOL Agent: press Enter to trust this folder, then type /exit and close this window.' -ForegroundColor Cyan; & '$claude'"
-    Start-Process powershell.exe -ArgumentList "-NoProfile", "-EncodedCommand", ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd)))
-    Write-Host "  A Claude window opened: press Enter there to trust the folder (once), then /exit" -ForegroundColor Cyan
-  }
+  # one time: Claude asks "trust this folder?" and "enable Remote Control?" - the bot cannot answer, you do
+  Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$Agent\wol-claude.ps1`"", "-Setup"
+  Write-Host "  A Claude window opened: answer its questions once (Enter, y), then close it" -ForegroundColor Cyan
 }
 if (-not $NoLockAtLogon) {
   $lock = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\rundll32.exe" -Argument "user32.dll,LockWorkStation"

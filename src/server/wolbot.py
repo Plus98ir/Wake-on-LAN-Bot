@@ -368,10 +368,15 @@ def claude_wait(api, cfg, chat, mid, i):
         time.sleep(4)
         rc, out = pc_run(m, actions(m)["claude_status"])
         out = ANSI.sub("", out)
-        if re.search(r"https://claude\.ai/\S+|error|not found|not trusted", out, re.I):
+        if re.search(r"https://claude\.ai/\S+|error|not found|not trusted|\(y/n\)", out, re.I):
             break
     url = re.search(r"https://claude\.ai/\S+", out)
-    if url:
+    if "(y/n)" in out or "not trusted" in out.lower():
+        pc_run(m, actions(m)["claude_stop"])  # it would wait for an answer forever
+        note = ("🤖 Claude needs a one-time answer on the PC (trust the folder / enable Remote Control).\n"
+                "On the PC open WOL Agent and press \"Claude one-time setup\", answer Enter and y, "
+                "close the window. Then press 🤖 Claude Remote again.")
+    elif url:
         note = (f"🤖 Claude Remote Control is on.\n\nOpen: {url.group(0)}\n"
                 f"or the Claude app -> Code -> session \"{m['name']}\".")
     elif out.startswith("running"):
@@ -379,8 +384,6 @@ def claude_wait(api, cfg, chat, mid, i):
                 f"session \"{m['name']}\".\n\n" + out[-500:])
     else:
         note = "🤖 Claude did not start:\n" + out[-600:]
-        if "not trusted" in out.lower():
-            note += "\n\nRun WOL Agent on the PC once more: it opens Claude to trust the folder."
     t, kb = machine_view(cfg, i, note)
     api.edit(chat, mid, t, kb)
 
