@@ -7,3 +7,6 @@ backups/
 
 # build output (attached to GitHub releases instead)
 *.exe
+
+# python bytecode
+__pycache__/
