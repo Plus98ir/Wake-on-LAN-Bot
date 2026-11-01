@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -46,7 +47,8 @@ func main() {
 	_ = os.MkdirAll(dir, 0o755)
 	script = filepath.Join(os.TempDir(), "wol-agent-setup.ps1")
 	// UTF-8 BOM so Windows PowerShell 5.1 reads the script as UTF-8
-	_ = os.WriteFile(script, append([]byte{0xEF, 0xBB, 0xBF}, setupPS...), 0o644)
+	bom := []byte{0xEF, 0xBB, 0xBF}
+	_ = os.WriteFile(script, append(bom, bytes.TrimPrefix(setupPS, bom)...), 0o644)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -114,13 +116,34 @@ func ps(args ...string) *exec.Cmd {
 }
 
 type runReq struct {
-	Action    string `json:"action"` // install | uninstall
-	Code      string `json:"code"`
-	Name      string `json:"name"`
-	WakeHost  string `json:"wakeHost"`
-	ExtraKey  string `json:"extraKey"`
-	ClaudeDir string `json:"claudeDir"`
-	NoLock    bool   `json:"noLock"`
+	Action     string          `json:"action"` // install | update | uninstall | claude-setup
+	Code       string          `json:"code"`
+	Name       string          `json:"name"`
+	WakeHost   string          `json:"wakeHost"`
+	ExtraKey   string          `json:"extraKey"`
+	ClaudeDir  string          `json:"claudeDir"`
+	ClaudeMode string          `json:"claudeMode"` // hidden | vscode
+	Apps       json.RawMessage `json:"apps"`       // [{name, path, args}] = the bot's app buttons
+	NoLock     bool            `json:"noLock"`
+}
+
+// appArgs passes the shared settings of install and update to setup-pc.ps1.
+func appArgs(req runReq) []string {
+	var args []string
+	if strings.TrimSpace(req.ClaudeDir) != "" {
+		args = append(args, "-ClaudeDir", strings.TrimSpace(req.ClaudeDir))
+	}
+	if req.ClaudeMode == "hidden" || req.ClaudeMode == "vscode" {
+		args = append(args, "-ClaudeMode", req.ClaudeMode)
+	}
+	if len(req.Apps) > 0 && string(req.Apps) != "null" {
+		// a file, not an argument: PowerShell mangles quotes in -File arguments
+		f := filepath.Join(os.TempDir(), "wol-agent-apps.json")
+		if os.WriteFile(f, req.Apps, 0o644) == nil {
+			args = append(args, "-AppsFile", f)
+		}
+	}
+	return args
 }
 
 // runHandler streams the script output to the page as plain text.
@@ -155,6 +178,8 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	case "uninstall":
 		args = []string{"-Uninstall"}
+	case "update":
+		args = append([]string{"-Update"}, appArgs(req)...)
 	case "install":
 		args = []string{"-PairCode", req.Code}
 		if req.Name != "" {
@@ -166,9 +191,7 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(req.ExtraKey) != "" {
 			args = append(args, "-ExtraKey", strings.TrimSpace(req.ExtraKey))
 		}
-		if strings.TrimSpace(req.ClaudeDir) != "" {
-			args = append(args, "-ClaudeDir", strings.TrimSpace(req.ClaudeDir))
-		}
+		args = append(args, appArgs(req)...)
 		if req.NoLock {
 			args = append(args, "-NoLockAtLogon")
 		}

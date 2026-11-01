@@ -11,7 +11,8 @@
 
 ### What it does
 - **Wake** a shut-down PC from a bot on your phone (Bale or Telegram).
-- **Control** it once it is on: start v2rayN or VS Code, lock, restart, shut down, see who is logged on.
+- **Control** it once it is on: start the apps you pick (up to 12), lock, restart, shut down, see who is logged on.
+- **Claude Remote**: start Claude Code Remote Control in the background or in a VS Code terminal you can see at the PC.
 - **VS Code from anywhere** with Remote-SSH, no open ports at home.
 - Works behind **any modem / NAT**: the PC connects out to your server, nothing is exposed at home.
 
@@ -91,7 +92,8 @@ No dependencies. Icon/manifest live in `rsrc_windows_amd64.syso` (`windres -O co
 
 ### چه کار می‌کند؟
 - **روشن کردن** کامپیوتر خاموش از توی گوشی، با بات بله یا تلگرام.
-- **کنترل** بعد از روشن شدن: اجرای v2rayN و VS Code، قفل، ری‌استارت، خاموش کردن، دیدن کاربر واردشده.
+- **کنترل** بعد از روشن شدن: اجرای برنامه‌هایی که خودت انتخاب می‌کنی (تا ۱۲ تا)، قفل، ری‌استارت، خاموش کردن، دیدن کاربر واردشده.
+- **Claude Remote**: روشن کردن Claude Code Remote Control پشت صحنه یا داخل ترمینال VS Code (پشت کامپیوتر هم دیده می‌شود).
 - **VS Code از هر جا** با Remote-SSH، بدون باز کردن پورت در خانه.
 - پشت **هر مودمی** کار می‌کند: کامپیوتر خودش به سرور وصل می‌شود.
 
@@ -129,6 +131,6 @@ sudo bash install.sh --token <توکن-بات> --public-host <آی‌پی-سرو
 دکمه‌ی **🤖 Claude Remote** در بات، Claude Code را روی کامپیوتر روشن می‌کند. بعد از اپ Claude یا سایت claude.ai/code ادامه می‌دهی (Claude Code یا افزونه‌ی VS Code آن باید نصب و وارد حساب شده باشد). بار اول برنامه یک پنجره‌ی Claude باز می‌کند: Enter بزن تا به پوشه اعتماد کند.
 
 ### استفاده
-در بات: ⚡ Wake (روشن) · 🤖 Claude Remote · ▶️ v2rayN / VS Code (اجرا) · 🔒 Lock (قفل) · ⏻ Shut down (خاموش) · 📡 Relay · ➕ Add PC (کامپیوتر جدید)
+در بات: ⚡ Wake (روشن) · 🤖 Claude Remote · ▶️ برنامه‌های انتخابی (اجرا) · 🔒 Lock (قفل) · ⏻ Shut down (خاموش) · 📡 Relay · ➕ Add PC (کامپیوتر جدید)
 
 </div>

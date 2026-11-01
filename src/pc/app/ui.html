@@ -39,8 +39,15 @@ ol{margin:12px 0 0;padding-inline-start:20px} li{margin:6px 0}
 .parts div{display:flex;gap:10px;align-items:baseline;background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
 header img{width:40px;height:40px}
 a{color:var(--acc)}
+.applist{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:8px;padding:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:2px 10px}
+.applist label{display:flex;align-items:center;gap:8px;margin:0;font-weight:400;padding:4px 6px;border-radius:6px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.applist label:hover{background:#21262d}
+.applist input{flex:none}
+.radios{display:flex;gap:18px;flex-wrap:wrap}
+.radios label{display:flex;align-items:center;gap:6px;margin:4px 0;font-weight:400}
+.addrow{display:grid;grid-template-columns:1fr 2fr auto;gap:8px;margin-top:8px}
 .lang{background:none;border:1px solid var(--line);padding:6px 12px;font-size:13px}
-@media (max-width:700px){header,main{padding-left:16px;padding-right:16px} main{grid-template-columns:1fr}}
+@media (max-width:700px){header,main{padding-left:16px;padding-right:16px} main{grid-template-columns:1fr} .addrow{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -88,6 +95,27 @@ a{color:var(--acc)}
   </section>
 
   <section class="card">
+    <h2 data-t="appsT"></h2>
+    <label data-t="cmode"></label>
+    <div class="radios">
+      <label><input type="radio" name="cmode" value="hidden" checked><span data-t="cmHidden"></span></label>
+      <label><input type="radio" name="cmode" value="vscode"><span data-t="cmVscode"></span></label>
+    </div>
+    <div class="help" data-t="cmHelp"></div>
+    <label for="afilter"><span data-t="appsL"></span> <span id="acount" style="color:var(--mut);font-weight:400"></span></label>
+    <input type="text" id="afilter" autocomplete="off">
+    <div class="applist" id="alist"></div>
+    <div class="help" data-t="appsHelp"></div>
+    <div class="addrow">
+      <input type="text" id="aname" autocomplete="off">
+      <input type="text" id="apath" placeholder="C:\Program Files\App\app.exe" autocomplete="off">
+      <button id="aadd" data-t="aadd"></button>
+    </div>
+    <div class="row"><button class="pri" id="save" data-t="save"></button></div>
+    <div class="help" data-t="saveHelp"></div>
+  </section>
+
+  <section class="card">
     <h2 data-t="manual"></h2>
     <div class="lead" data-t="lead"></div>
     <div class="parts">
@@ -121,6 +149,11 @@ const L={
   wake:"آدرس مودم",wakeHelp:"خالی بگذار؛ آی‌پی اینترنتت خودکار پیدا و به‌روز می‌شود. فقط اگر DDNS داری اینجا بنویس. اینترنت TD-LTE / ۴G: این روش کار نمی‌کند، در بات «📡 Relay» را بزن.",
   xkey:"کلید لپ‌تاپ (فقط برای VS Code از لپ‌تاپ دیگر)",xkeyHelp:"لازم نیست. فقط اگر می‌خواهی از یک لپ‌تاپ دیگر با VS Code به همین کامپیوتر وصل شوی، محتوای فایل id_ed25519.pub آن لپ‌تاپ را اینجا بچسبان. برای Claude از راه دور لازم نیست.",
   lock:"بعد از ورود خودکار، صفحه فوراً قفل شود",install:"نصب و اتصال",csetup:"🤖 راه‌اندازی یک‌باره‌ی Claude",uninstall:"حذف از این سیستم",
+  appsT:"دکمه‌های بات: برنامه‌ها و Claude",cmode:"🤖 Claude Remote کجا باز شود؟",cmHidden:"پشت صحنه (بدون پنجره)",cmVscode:"داخل VS Code (ترمینال)",
+  cmHelp:"«داخل VS Code»: یک پنجره‌ی VS Code به اسم WOL-Claude با همان پوشه باز می‌شود و Claude در ترمینالش روشن می‌شود؛ پشت کامپیوتر هم می‌بینی‌اش. بار اول «🤖 راه‌اندازی یک‌باره‌ی Claude» را بزن و در VS Code گزینه‌های Trust و Allow را بزن.",
+  appsL:"برنامه‌هایی که در بات دکمه دارند",appsHelp:"تیک بزن (حداکثر ۱۲). در کادر بالا برای جستجو تایپ کن. برنامه در لیست نیست؟ پایین اسم و مسیر فایل exe را بده.",
+  aname:"اسم دکمه",aadd:"افزودن",save:"ذخیره",saveHelp:"برای سیستمی که از قبل وصل است؛ بعد در بات روی این کامپیوتر 🔄 Refresh بزن. «نصب و اتصال» هم همین‌ها را ذخیره می‌کند.",
+  needPath:"مسیر کامل فایل exe را بنویس.",tooMany:"حداکثر ۱۲ برنامه.",notPaired:"اول با کد اتصال وصل کن.",
   manual:"راهنما — چطور کار می‌کند؟",
   lead:"از توی گوشی، با بات، کامپیوترت را روشن می‌کنی و برنامه‌هایش را باز می‌کنی.",
   p1:"<b>بات</b> = ریموت کنترل توی گوشی (بله یا تلگرام)",
@@ -131,7 +164,7 @@ const L={
   m3:"<b>اتصال:</b> در بات بزن ➕ Add PC، کد را در کادر «کد اتصال» بچسبان و «نصب و اتصال» را بزن.",
   m4:"<b>ورود خودکار ویندوز (یک‌بار):</b> برنامه‌ی <a href='https://learn.microsoft.com/sysinternals/downloads/autologon' target='_blank'>Autologon</a> را اجرا کن، رمز ویندوز را بده و Enable بزن. ویندوز خودش وارد می‌شود و فوراً قفل می‌شود، پس امن است.",
   m5:"<b>مودم:</b> اینترنت TD-LTE / ۴G یا آی‌پی که مدام عوض می‌شود؟ در بات روی این کامپیوتر بزن <b>📡 Relay</b> و یک گوشی قدیمی همیشه‌روشن روی Wi-Fi همین خانه را رله کن (مودم تنظیم نمی‌خواهد). وگرنه در مودم پورت UDP 9 را به آی‌پی این کامپیوتر فوروارد و آن آی‌پی را رزرو کن.",
-  m6:"<b>تست:</b> کامپیوتر را خاموش کن و از گوشی در بات Wake را بزن. بعد 🤖 Claude Remote را بزن و از اپ Claude ادامه بده. دکمه‌های دیگر: v2rayN، Lock (قفل)، Shut down (خاموش).",
+  m6:"<b>تست:</b> کامپیوتر را خاموش کن و از گوشی در بات Wake را بزن. بعد 🤖 Claude Remote را بزن و از اپ Claude ادامه بده. دکمه‌های دیگر: برنامه‌هایی که انتخاب کردی، Lock (قفل)، Shut down (خاموش).",
   more:"کامپیوتر دیگری داری؟ همین برنامه را روی آن هم اجرا کن و با یک کد تازه از بات وصلش کن.",
   log:"گزارش",yes:"بله",no:"خیر",running:"در حال اجرا…",needCode:"اول کد اتصال را وارد کن.",confirmUn:"همه‌ی تنظیمات WOL Agent از این سیستم حذف شود؟",
   k:{name:"اسم",user:"کاربر",os:"ویندوز",board:"مادربرد",nic:"کارت شبکه",mac:"MAC",link:"لینک",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",claude:"Claude Code",sshd:"OpenSSH Server",paired:"وصل به بات",tunnel:"تونل"}},
@@ -143,6 +176,11 @@ const L={
   wake:"Modem address",wakeHelp:"Leave empty: your internet IP is found and kept up to date. Only for a DDNS name. TD-LTE / 4G: this does not work, press “📡 Relay” in the bot instead.",
   xkey:"Laptop key (only for VS Code from another laptop)",xkeyHelp:"Not needed. Only to open this PC in VS Code from another laptop: paste that laptop's id_ed25519.pub. Not needed for Claude Remote.",
   lock:"Lock the screen right after auto-logon",install:"Install & link",csetup:"🤖 Claude one-time setup",uninstall:"Remove from this PC",
+  appsT:"Bot buttons: apps and Claude",cmode:"Where does 🤖 Claude Remote open?",cmHidden:"In the background (no window)",cmVscode:"In VS Code (terminal)",
+  cmHelp:"“In VS Code”: a VS Code window named WOL-Claude opens on that folder and Claude starts in its terminal, so you see it at the PC too. First time: press “🤖 Claude one-time setup” and click Trust and Allow in VS Code.",
+  appsL:"Apps with a button in the bot",appsHelp:"Tick them (up to 12). Type in the box above to search. Not in the list? Give a name and the .exe path below.",
+  aname:"Button name",aadd:"Add",save:"Save",saveHelp:"For a PC that is already linked; then press 🔄 Refresh on this PC in the bot. “Install & link” saves these too.",
+  needPath:"Enter the full path of the .exe file.",tooMany:"Up to 12 apps.",notPaired:"Link with a pair code first.",
   manual:"Guide — how does it work?",
   lead:"From your phone, through the bot, you turn this PC on and open its apps.",
   p1:"<b>Bot</b> = the remote control on your phone (Bale or Telegram)",
@@ -153,7 +191,7 @@ const L={
   m3:"<b>Link:</b> in the bot press ➕ Add PC, paste the code into “Pair code” and press “Install & link”.",
   m4:"<b>Windows auto-logon (once):</b> run <a href='https://learn.microsoft.com/sysinternals/downloads/autologon' target='_blank'>Autologon</a>, enter the Windows password, press Enable. Windows signs in and locks right away, so it stays safe.",
   m5:"<b>Modem:</b> TD-LTE / 4G, or an IP that keeps changing? In the bot press <b>📡 Relay</b> on this PC and make an old always-on phone on the home Wi-Fi the relay (no modem setup). Otherwise forward UDP port 9 to this PC's IP and reserve that IP.",
-  m6:"<b>Test:</b> shut the PC down and press Wake in the bot. Then press 🤖 Claude Remote and continue in the Claude app. Other buttons: v2rayN, Lock, Shut down.",
+  m6:"<b>Test:</b> shut the PC down and press Wake in the bot. Then press 🤖 Claude Remote and continue in the Claude app. Other buttons: the apps you picked, Lock, Shut down.",
   more:"Another PC? Run this app there too and link it with a fresh code from the bot.",
   log:"Log",yes:"yes",no:"no",running:"Running…",needCode:"Enter the pair code first.",confirmUn:"Remove all WOL Agent settings from this PC?",
   k:{name:"Name",user:"User",os:"Windows",board:"Board",nic:"Network card",mac:"MAC",link:"Link",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",claude:"Claude Code",sshd:"OpenSSH Server",paired:"Linked to bot",tunnel:"Tunnel"}}
@@ -163,7 +201,7 @@ const $=id=>document.getElementById(id);
 function tr(){
   const t=L[lang];document.documentElement.lang=lang;document.documentElement.dir=lang=="fa"?"rtl":"ltr";
   document.querySelectorAll("[data-t]").forEach(e=>e.innerHTML=t[e.dataset.t]);
-  $("lang").textContent=lang=="fa"?"English":"فارسی";renderSys();
+  $("lang").textContent=lang=="fa"?"English":"فارسی";$("aname").placeholder=t.aname;renderSys();
 }
 function renderSys(){
   if(!info)return;const t=L[lang],k=t.k;
@@ -178,22 +216,68 @@ function renderSys(){
     h+=`<dt>${k[key]}</dt><dd>${v(key,val)}${key=="paired"&&info.paired?` <span style="color:var(--mut)">(${info.server}, port ${info.port})</span>`:""}</dd>`;}
   $("sys").innerHTML=h;
 }
+// app picker: every known app (Start menu + saved + added by hand); the ticked ones become bot buttons
+let apps=[],picked=new Set(),appsInit=false;
+const akey=a=>(a.path+"|"+(a.args||"")).toLowerCase();
+function initApps(){
+  const seen=new Set(apps.map(akey));
+  const add=a=>{const k=akey(a);if(!seen.has(k)){seen.add(k);apps.push({name:String(a.name||""),path:a.path,args:a.args||""});}return k;};
+  (info.startApps||[]).forEach(add);
+  if(!appsInit){
+    appsInit=true;
+    if((info.apps||[]).length)info.apps.forEach(a=>picked.add(add(a)));
+    else apps.filter(a=>a.path&&(a.path==info.v2rayn||a.path==info.vscode)).forEach(a=>picked.add(akey(a)));
+    document.querySelectorAll("input[name=cmode]").forEach(r=>r.checked=r.value==(info.claudeMode||"hidden"));
+  }
+  apps.sort((a,b)=>a.name.localeCompare(b.name));renderApps();
+}
+function renderApps(){
+  const f=$("afilter").value.trim().toLowerCase(),esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+  const row=(a,i)=>`<label title="${esc(a.path+" "+a.args)}"><input type="checkbox" data-i="${i}" ${picked.has(akey(a))?"checked":""}>${esc(a.name)}</label>`;
+  // ticked apps first, the rest filtered by the search box
+  $("alist").innerHTML=apps.map((a,i)=>picked.has(akey(a))?row(a,i):"").join("")+
+    apps.map((a,i)=>!picked.has(akey(a))&&(!f||a.name.toLowerCase().includes(f))?row(a,i):"").join("");
+  $("acount").textContent=`(${picked.size}/12)`;
+}
+$("alist").onchange=e=>{const a=apps[e.target.dataset.i],k=akey(a);
+  if(e.target.checked){if(picked.size>=12){e.target.checked=false;alert(L[lang].tooMany);return;}picked.add(k);}else picked.delete(k);
+  $("acount").textContent=`(${picked.size}/12)`;};
+$("afilter").oninput=renderApps;
+// adds the typed exe; false (with a message) if the path is not usable
+function addCustom(){
+  const path=$("apath").value.trim().replace(/^"|"$/g,"");if(!/\.exe$/i.test(path)){alert(L[lang].needPath);return false;}
+  const name=$("aname").value.trim()||path.split("\\").pop().replace(/\.exe$/i,"");
+  const a={name,path,args:""};
+  if(!picked.has(akey(a))&&picked.size>=12){alert(L[lang].tooMany);return false;}
+  if(!apps.some(x=>akey(x)==akey(a)))apps.push(a);picked.add(akey(a));
+  $("aname").value=$("apath").value="";renderApps();return true;
+}
+$("aadd").onclick=addCustom;
+$("apath").onkeydown=e=>{if(e.key=="Enter")addCustom();};
+function settings(){
+  // a path typed without pressing Add still counts
+  if($("apath").value.trim()&&!addCustom())return null;
+  return {claudeDir:$("cdir").value.trim(),claudeMode:document.querySelector("input[name=cmode]:checked").value,
+    apps:apps.filter(a=>picked.has(akey(a))).map(a=>({name:a.name,path:a.path,args:a.args}))};
+}
 async function detect(){
   $("sys").innerHTML=`<dt>${L[lang].running}</dt><dd></dd>`;
-  try{info=await (await fetch("/api/detect")).json();if(!$("name").value)$("name").value=info.name;if(!$("cdir").value)$("cdir").value=info.claudeDir||"";renderSys();}
+  try{info=await (await fetch("/api/detect")).json();if(!$("name").value)$("name").value=info.name;if(!$("cdir").value)$("cdir").value=info.claudeDir||"";renderSys();initApps();}
   catch(e){$("sys").innerHTML=`<dt class="bad">Error</dt><dd>${e}</dd>`;}
 }
 async function run(body){
-  $("install").disabled=$("uninstall").disabled=true;$("out").textContent=L[lang].running+"\n";
+  $("install").disabled=$("uninstall").disabled=$("save").disabled=true;$("out").textContent=L[lang].running+"\n";
   try{
     const r=await fetch("/api/run",{method:"POST",body:JSON.stringify(body)});
     const rd=r.body.getReader(),dec=new TextDecoder();
     for(;;){const {done,value}=await rd.read();if(done)break;$("out").textContent+=dec.decode(value,{stream:true});$("out").scrollTop=1e9;}
   }catch(e){$("out").textContent+="\nERROR: "+e;}
-  $("install").disabled=$("uninstall").disabled=false;detect();
+  $("install").disabled=$("uninstall").disabled=$("save").disabled=false;detect();
 }
 $("install").onclick=()=>{const code=$("code").value.trim();if(!code){alert(L[lang].needCode);return;}
-  run({action:"install",code,name:$("name").value.trim(),wakeHost:$("wake").value.trim(),extraKey:$("xkey").value.trim(),claudeDir:$("cdir").value.trim(),noLock:!$("lock").checked});};
+  const st=settings();if(!st)return;
+  run({action:"install",code,name:$("name").value.trim(),wakeHost:$("wake").value.trim(),extraKey:$("xkey").value.trim(),noLock:!$("lock").checked,...st});};
+$("save").onclick=()=>{if(!info||!info.paired){alert(L[lang].notPaired);return;}const st=settings();if(st)run({action:"update",...st});};
 $("csetup").onclick=()=>run({action:"claude-setup"});
 $("uninstall").onclick=()=>{if(confirm(L[lang].confirmUn))run({action:"uninstall"});};
 $("refresh").onclick=detect;

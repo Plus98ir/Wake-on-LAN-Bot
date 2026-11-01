@@ -219,6 +219,38 @@ def apps(m):
     return m.get("apps", DEFAULT_APPS[m.get("os", "windows")])
 
 
+APP_TASK = re.compile(r"^App\d{1,2}$")
+APPS_FILE = r"C:\ProgramData\wol-agent\apps.json"
+
+
+def apps_from(lst):
+    """[{name, task}] chosen in WOL Agent -> {button name: command}; None if unusable."""
+    if isinstance(lst, dict):  # PowerShell writes a one-item list as an object
+        lst = [lst]
+    if not isinstance(lst, list):
+        return None
+    out = {}
+    for a in lst:
+        if isinstance(a, dict) and APP_TASK.match(str(a.get("task", ""))):
+            name = re.sub(r"\s+", " ", str(a.get("name") or a["task"])).strip()[:30]
+            out[name] = f'schtasks /run /tn "WOL\\{a["task"]}"'
+    return out
+
+
+def sync_apps(cfg, m):
+    """Pick up the app buttons saved on the PC (WOL Agent -> Save)."""
+    if m.get("os", "windows") != "windows":
+        return
+    rc, out = pc_run(m, f"type {APPS_FILE}")
+    try:
+        new = apps_from(json.loads(out.lstrip("\ufeff"))) if rc == 0 else None
+    except ValueError:
+        new = None
+    if new is not None and new != m.get("apps"):
+        m["apps"] = new
+        save(cfg)
+
+
 # ---------- bot ----------
 
 class Api:
@@ -370,6 +402,8 @@ def claude_wait(api, cfg, chat, mid, i):
         out = ANSI.sub("", out)
         if re.search(r"https://claude\.ai/\S+|error|not found|not trusted|\(y/n\)", out, re.I):
             break
+        if out.startswith("running") and "vscode:" in out:  # VS Code mode prints no link
+            break
     url = re.search(r"https://claude\.ai/\S+", out)
     if "(y/n)" in out or "not trusted" in out.lower():
         pc_run(m, actions(m)["claude_stop"])  # it would wait for an answer forever
@@ -379,6 +413,9 @@ def claude_wait(api, cfg, chat, mid, i):
     elif url:
         note = (f"🤖 Claude Remote Control is on.\n\nOpen: {url.group(0)}\n"
                 f"or the Claude app -> Code -> session \"{m['name']}\".")
+    elif out.startswith("running") and "vscode:" in out:
+        note = ("🤖 Claude Remote Control is on (VS Code window WOL-Claude on the PC).\n"
+                f"Open the Claude app or claude.ai/code -> Code -> session \"{m['name']}\".")
     elif out.startswith("running"):
         note = (f"🤖 Claude Remote Control is on.\nOpen the Claude app or claude.ai/code -> Code -> "
                 f"session \"{m['name']}\".\n\n" + out[-500:])
@@ -439,8 +476,11 @@ def handle_callback(api, cfg, cb):
         return None
     m = cfg["machines"][i]
     note = ""
-    if op == "o" or op == "s":
+    if op == "o":
         pass
+    elif op == "s":
+        if m.get("pc") and online(m):
+            sync_apps(cfg, m)
     elif op == "w":
         ok, report = wake(m)
         note = ("⚡ Magic packet sent." if ok else "❌ Wake failed.") + "\n" + "\n".join(report)
@@ -448,9 +488,13 @@ def handle_callback(api, cfg, cb):
             note += f"\nWaiting up to {WAKE_WAIT // 60} min for it to come online..."
             threading.Thread(target=wait_online, args=(api, cfg, chat, mid, i), daemon=True).start()
     elif op == "a":
-        name = list(apps(m))[int(parts[2])]
-        rc, out = pc_run(m, apps(m)[name])
-        note = f"▶️ {name}: " + ("started" if rc == 0 else f"failed ({out[-200:]})")
+        names = list(apps(m))
+        j = int(parts[2])
+        if j >= len(names):
+            note = "The app list changed - try again."
+        else:
+            rc, out = pc_run(m, apps(m)[names[j]])
+            note = f"▶️ {names[j]}: " + ("started" if rc == 0 else f"failed ({out[-200:]})")
     elif op in ("l", "u", "R", "H"):
         key = {"l": "lock", "u": "who", "R": "restart", "H": "shutdown"}[op]
         rc, out = pc_run(m, actions(m)[key])
@@ -576,6 +620,10 @@ def pair(cfg, req, client_ip):
     port = (m.get("pc") or {}).get("port") or free_port(cfg)
     m["os"] = req.get("os", "windows")
     m["pc"] = {"port": port, "user": str(req.get("user") or "Administrator"), "tunnel_key": key}
+    if "apps" in req:  # app buttons chosen in WOL Agent
+        new = apps_from(req["apps"])
+        if new is not None:
+            m["apps"] = new
     if not m.get("wake"):
         # any modem: UDP magic packet to its public address (needs a port forward of UDP 9)
         # "auto": ip_watch follows the home IP while the PC is online
