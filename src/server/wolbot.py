@@ -414,8 +414,8 @@ def claude_wait(api, cfg, chat, mid, i):
         note = (f"🤖 Claude Remote Control is on.\n\nOpen: {url.group(0)}\n"
                 f"or the Claude app -> Code -> session \"{m['name']}\".")
     elif out.startswith("running") and "vscode:" in out:
-        note = ("🤖 Claude Remote Control is on (VS Code window WOL-Claude on the PC).\n"
-                f"Open the Claude app or claude.ai/code -> Code -> session \"{m['name']}\".")
+        note = ("🤖 Claude is open in VS Code on the PC (window WOL-Claude, Claude panel).\n"
+                "Open the Claude app or claude.ai/code -> Code: the newest session (computer icon) is that chat.")
     elif out.startswith("running"):
         note = (f"🤖 Claude Remote Control is on.\nOpen the Claude app or claude.ai/code -> Code -> "
                 f"session \"{m['name']}\".\n\n" + out[-500:])

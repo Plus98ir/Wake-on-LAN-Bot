@@ -6,7 +6,7 @@
     -Name PC  -WakeHost <modem DDNS/IP for UDP wake>  -ExtraKey "<laptop pubkey for VS Code Remote-SSH>"
     -V2rayN <path>  -VSCode <path>  -NoLockAtLogon  -Detect (print system info as JSON)  -Uninstall
     -ClaudeDir <folder>  (where the bot's "Claude Remote" button starts Claude Code; default Documents)
-    -ClaudeMode hidden|vscode  (run Claude Remote in the background, or in a VS Code terminal)
+    -ClaudeMode hidden|vscode  (run Claude Remote in the background, or in the VS Code Claude panel)
     -AppsFile <json>  ([{name, path, args}] = the bot's app buttons; default v2rayN + VS Code)
     -Update  (already paired: only save apps + Claude settings)
 #>
@@ -184,7 +184,7 @@ function Set-Apps($list) {
 
 # Closes VS Code windows whose title contains a text (the WOL-Claude workspace), copied into wol-claude.ps1
 $WinClose = @'
-function Close-Window($title) {
+function Find-Window($title, [bool]$close) {
   Add-Type -ErrorAction SilentlyContinue -TypeDefinition '
 using System; using System.Text; using System.Runtime.InteropServices;
 public class WolWin {
@@ -193,36 +193,41 @@ public class WolWin {
   [DllImport("user32.dll")] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
-  public static int Close(string t) {
+  public static int Close(string t, bool close) {
     int n = 0;
     EnumWindows((h, l) => { var s = new StringBuilder(512); GetWindowText(h, s, 512);
-      if (IsWindowVisible(h) && s.ToString().Contains(t)) { PostMessage(h, 0x10, IntPtr.Zero, IntPtr.Zero); n++; } return true; }, IntPtr.Zero);
+      if (IsWindowVisible(h) && s.ToString().Contains(t)) { if (close) PostMessage(h, 0x10, IntPtr.Zero, IntPtr.Zero); n++; } return true; }, IntPtr.Zero);
     return n;
   }
 }'
-  [WolWin]::Close($title)
+  [WolWin]::Close($title, $close)
 }
+function Close-Window($title) { Find-Window $title $true }
 '@
 
 # Claude Code Remote Control: the bot starts it, then you continue from the Claude app / claude.ai/code
 function Set-Claude {
   $ws = "$Agent\WOL-Claude.code-workspace"
-  # vscode mode: a workspace of the Claude folder whose task starts Claude when the window opens
-  [ordered]@{
-    folders = @(@{ path = $ClaudeDir })
-    tasks   = [ordered]@{ version = "2.0.0"; tasks = @([ordered]@{
-      label = "Claude Remote"; type = "process"; command = "powershell.exe"
-      args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "$Agent\wol-claude.ps1", "-Run")
-      runOptions = @{ runOn = "folderOpen" }; problemMatcher = @()
-      presentation = [ordered]@{ reveal = "always"; panel = "dedicated"; focus = $true }
-    }) }
-  } | ConvertTo-Json -Depth 8 | Set-Content $ws -Encoding utf8
+  # vscode mode: a workspace of the Claude folder; the Claude panel is opened in it with vscode://anthropic.claude-code/open.
+  # Panel sessions show up in claude.ai/code only with remoteControlAtStartup on, so turn it on.
+  @{ folders = @(@{ path = $ClaudeDir }) } | ConvertTo-Json -Depth 4 | Set-Content $ws -Encoding utf8
+  if ($ClaudeMode -eq "vscode") {
+    $sf = "$env:USERPROFILE\.claude\settings.json"
+    try { $s = if (Test-Path $sf) { Get-Content $sf -Raw | ConvertFrom-Json } else { [pscustomobject]@{} } } catch { $s = $null }
+    if ($s -and $s.remoteControlAtStartup -ne $true) {
+      $s | Add-Member -NotePropertyName remoteControlAtStartup -NotePropertyValue $true -Force
+      New-Item -ItemType Directory -Force (Split-Path $sf) | Out-Null
+      $s | ConvertTo-Json -Depth 20 | Set-Content $sf -Encoding utf8
+      Write-Host "  Claude setting remoteControlAtStartup = true (VS Code Claude sessions show in claude.ai/code)"
+    }
+  }
   @"
 # Starts Claude Code Remote Control in '$ClaudeDir' (task WOL\Claude), mode '$ClaudeMode':
-# hidden = background process, vscode = terminal of the VS Code window "WOL-Claude" ($ws).
-# -Status prints its log, -Stop ends it, -Setup = the one-time questions in a visible window, -Run = VS Code task,
+# hidden = background 'claude remote-control' process,
+# vscode = the VS Code window "WOL-Claude" ($ws) with the Claude panel open (remoteControlAtStartup puts it in claude.ai/code).
+# -Status prints its log, -Stop ends it, -Setup = the one-time questions in a visible window,
 # -Close = close the VS Code window (task WOL\ClaudeClose: ssh runs outside the desktop and cannot see windows).
-param([switch]`$Status, [switch]`$Stop, [switch]`$Setup, [switch]`$Run, [switch]`$Close)
+param([switch]`$Status, [switch]`$Stop, [switch]`$Setup, [switch]`$Close)
 `$mode = '$ClaudeMode'
 `$log = '$Agent\claude.log'
 `$ws = '$ws'
@@ -234,34 +239,36 @@ function Open-VSCode {
   Close-Window 'WOL-Claude' | Out-Null
   Start-Sleep -Seconds 2
   Start-Process -FilePath `$code -ArgumentList '--new-window', "``"`$ws``""
+  for (`$i = 0; `$i -lt 30 -and -not (Find-Window 'WOL-Claude' `$false); `$i++) { Start-Sleep -Seconds 1 }
+  Start-Sleep -Seconds 3
+  # the Claude extension's URI handler opens its panel in the focused window (the new one)
+  Start-Process 'vscode://anthropic.claude-code/open'
   `$true
 }
 if (`$Close) { Close-Window 'WOL-Claude' | Out-Null; exit 0 }
 if (`$Stop) {
   `$procs | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }
-  if (`$mode -eq 'vscode') { Start-Sleep -Seconds 1; schtasks /run /tn 'WOL\ClaudeClose' | Out-Null }
+  if (`$mode -eq 'vscode') { schtasks /run /tn 'WOL\ClaudeClose' | Out-Null; 'stopped (VS Code window WOL-Claude closed)'; exit 0 }
   "stopped (`$(`$procs.Count) process)"; exit 0
 }
 if (`$Status) {
-  if (`$procs.Count) { 'running' } else { 'not running' }
+  if (`$mode -eq 'vscode') { 'running' } elseif (`$procs.Count) { 'running' } else { 'not running' }
   foreach (`$f in `$log, "`$log.err") { if (Test-Path `$f) { Get-Content `$f -Tail 25 } }
   exit 0
 }
 $FindClaude
 `$exe = Find-Claude
-if (`$Run -or `$Setup) {
-  `$procs | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }
-  if (-not `$exe) { Write-Host 'Claude Code is not installed on this PC.' -ForegroundColor Red; exit 1 }
-  if (`$Setup -and `$mode -eq 'vscode') {
-    Write-Host 'A VS Code window "WOL-Claude" opens. One time only:' -ForegroundColor Cyan
-    Write-Host '  1. Trust it: "Yes, I trust the authors" (or the Restricted Mode bar -> Manage -> Trust).'
-    Write-Host '  2. "Allow" when VS Code asks to run the automatic task (bottom right; the bell if hidden).'
-    Write-Host '  3. In its terminal: press Enter if Claude asks to trust the folder, type /exit, then y for "Enable Remote Control?".'
-    Write-Host '  Nothing in the terminal after Trust? Close the window and press this button again.'
+if (`$Setup) {
+  if (`$mode -eq 'vscode') {
+    Write-Host 'A VS Code window "WOL-Claude" opens with the Claude panel. One time only:' -ForegroundColor Cyan
+    Write-Host '  Trust it: "Yes, I trust the authors" (or the Restricted Mode bar -> Manage -> Trust).'
+    Write-Host '  The chat then shows in the Claude app / claude.ai/code too.'
     if (-not (Open-VSCode)) { Write-Host 'VS Code is not installed on this PC.' -ForegroundColor Red }
     Read-Host 'Press Enter to close this window'
     exit 0
   }
+  `$procs | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }
+  if (-not `$exe) { Write-Host 'Claude Code is not installed on this PC.' -ForegroundColor Red; exit 1 }
   Set-Location -LiteralPath '$ClaudeDir'
   if (-not (Test-ClaudeTrust '$ClaudeDir')) {
     Write-Host 'Claude asks whether you trust this folder - press Enter, then type /exit' -ForegroundColor Cyan
@@ -271,14 +278,15 @@ if (`$Run -or `$Setup) {
   & `$exe remote-control --name '$Name'
   exit 0
 }
+if (`$mode -eq 'vscode') {
+  Remove-Item `$log, "`$log.err" -ErrorAction SilentlyContinue
+  if (-not (Open-VSCode)) { 'error: VS Code not found on this PC' | Set-Content `$log; exit 1 }
+  "vscode: `$(Get-Date -Format 'yyyy-MM-dd HH:mm') opened the VS Code window WOL-Claude with the Claude panel - continue in the Claude app / claude.ai/code (the chat is also in VS Code). Not there? On the PC: WOL Agent -> Claude one-time setup." | Set-Content `$log
+  exit 0
+}
 if (`$procs.Count) { exit 0 }
 if (-not `$exe) { 'error: Claude Code not found on this PC (install the VS Code extension or the CLI)' | Set-Content `$log; exit 1 }
 Remove-Item `$log, "`$log.err" -ErrorAction SilentlyContinue
-if (`$mode -eq 'vscode') {
-  if (-not (Open-VSCode)) { 'error: VS Code not found on this PC' | Set-Content `$log; exit 1 }
-  'vscode: Claude starts in the terminal of the VS Code window WOL-Claude. Not running after a minute? On the PC: WOL Agent -> Claude one-time setup.' | Set-Content `$log
-  exit 0
-}
 Start-Process -FilePath `$exe -ArgumentList 'remote-control', '--name', '$Name' -WorkingDirectory '$ClaudeDir' ``
   -RedirectStandardOutput `$log -RedirectStandardError "`$log.err" -WindowStyle Hidden
 "@ | Set-Content -Path "$Agent\wol-claude.ps1" -Encoding utf8
@@ -291,13 +299,13 @@ Start-Process -FilePath `$exe -ArgumentList 'remote-control', '--name', '$Name' 
     return
   }
   if (-not (Test-Path $ClaudeDir)) { New-Item -ItemType Directory -Path $ClaudeDir -Force | Out-Null }
-  Write-Host "  Claude -> remote-control in $ClaudeDir ($(if ($ClaudeMode -eq 'vscode') { 'in a VS Code terminal' } else { 'in the background' }))"
+  Write-Host "  Claude -> remote-control in $ClaudeDir ($(if ($ClaudeMode -eq 'vscode') { 'in the VS Code Claude panel' } else { 'in the background' }))"
   if ($ClaudeMode -eq "hidden" -and -not (Test-ClaudeTrust $ClaudeDir)) {
     # one time: Claude asks "trust this folder?" and "enable Remote Control?" - the bot cannot answer, you do
     Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$Agent\wol-claude.ps1`"", "-Setup"
     Write-Host "  A Claude window opened: answer its questions once (Enter, y), then close it" -ForegroundColor Cyan
   } elseif ($ClaudeMode -eq "vscode") {
-    Write-Host "  First time in VS Code mode: press 'Claude one-time setup' (Trust + Allow in VS Code)" -ForegroundColor Cyan
+    Write-Host "  First time in VS Code mode: press 'Claude one-time setup' (Trust the VS Code window)" -ForegroundColor Cyan
   }
 }
 
