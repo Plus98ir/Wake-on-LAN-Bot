@@ -66,6 +66,8 @@ wolbot add-wake <name> ssh <host> <port> <user> [iface]
 wolbot relay-code <name>
 wolbot auth <https://auth.example.com> [port] | auth off
 wolbot passkey-add <name> [user id] | passkey-list | passkey-del <name>
+wolbot auth login <minutes> | login off
+wolbot user add <id> <name> <perm,perm|all> [machine,...] | user list | user del <id>
 wolbot kill | unlock
 ```
 Config: `/etc/wol-bot/config.json`. Service: `systemctl status wol-bot`. Uninstall: `bash install.sh --uninstall`.
@@ -83,7 +85,15 @@ With Caddy: `auth.example.com { reverse_proxy 127.0.0.1:8791 }`.
 
 - A confirm link works **once** and for **2 minutes**, only for that one action on that one PC.
 - **Kill switch**: 3 failed checks in 10 minutes (wrong signature, reused link or sign-up code), or the **🛑 Kill switch** button (no fingerprint needed, cutting off is always safe): the bot blocks every action, and every online Windows PC locks its screen, stops the tunnel and SSH and turns its network cards off. Undo at the PC: `C:\ProgramData\wol-agent\wol-unkill.ps1` as administrator, then `wolbot unlock` on the server.
-- Anyone who is not an admin writing to the bot is reported to the admins.
+- **Fingerprint login**: even an admin must log in with a fingerprint before the bot shows anything; the login lasts 10 minutes. `wolbot auth login <minutes>` or `wolbot auth login off`.
+- **Per-user permissions**: admins can do everything; other people get only the buttons and PCs you give them:
+  ```bash
+  wolbot user add <id> <name> wake,lock,who [PC1,PC2]   # perms: wake apps claude lock who restart shutdown vscode | all
+  wolbot passkey-add <name> <id>                        # their own fingerprint
+  wolbot user list | user del <id>
+  ```
+  The other buttons are hidden for them, and pressing an old one is refused. Pairing, relays, removing PCs and the kill switch stay admin-only.
+- Anyone who is not an admin or user writing to the bot is reported to the admins.
 - More people: `wolbot admin <id>` then `wolbot passkey-add <name> <id>`; each person confirms with their own phone. `wolbot passkey-list`, `wolbot passkey-del <name>`.
 - Your phone may accept its screen-lock PIN instead of a finger (Android/iOS allow it), so use a long PIN, not a pattern. Passkeys in Google Password Manager / iCloud sync with that account: protect it with 2FA.
 
@@ -163,6 +173,14 @@ wolbot passkey-add Phone      # لینک یک‌بار مصرف را در گوش
 
 - لینک تأیید **یک بار** و تا **۲ دقیقه** کار می‌کند و فقط برای همان دستور روی همان کامپیوتر است.
 - **کیل‌سوییچ**: ۳ تأیید ناموفق در ۱۰ دقیقه یا زدن دکمه‌ی **🛑 Kill switch** (اثر انگشت نمی‌خواهد): بات همه‌چیز را می‌بندد و کامپیوترها قفل می‌شوند، تونل و SSH خاموش و کارت شبکه قطع می‌شود. برگشت: پشت کامپیوتر `C:\ProgramData\wol-agent\wol-unkill.ps1` را با دسترسی ادمین اجرا کن، بعد روی سرور `wolbot unlock`.
+- **ورود با اثر انگشت**: حتی ادمین قبل از دیدن هر چیزی باید با اثر انگشت وارد شود؛ ورود ۱۰ دقیقه اعتبار دارد. تغییر: `wolbot auth login <دقیقه>` یا `wolbot auth login off`.
+- **دسترسی جدا برای هر کاربر**: ادمین همه‌کاره است؛ بقیه فقط دکمه‌ها و کامپیوترهایی را می‌بینند که تو تعیین کنی:
+  ```bash
+  wolbot user add <id> <اسم> wake,lock,who [PC1,PC2]   # wake apps claude lock who restart shutdown vscode | all
+  wolbot passkey-add <اسم> <id>
+  wolbot user list | user del <id>
+  ```
+  Add PC، رله، حذف کامپیوتر و کیل‌سوییچ فقط برای ادمین است.
 - هر غریبه‌ای که به بات پیام بدهد به ادمین‌ها گزارش می‌شود.
 - نفر دیگر: `wolbot admin <id>` و بعد `wolbot passkey-add <اسم> <id>`؛ هر کس با گوشی خودش تأیید می‌کند. باطل کردن: `wolbot passkey-del <اسم>`.
 - گوشی ممکن است به‌جای اثر انگشت PIN قفل صفحه را هم قبول کند؛ پس PIN بلند بگذار، نه الگو. Passkey با حساب گوگل/iCloud همگام می‌شود؛ روی آن حساب 2FA بگذار.
