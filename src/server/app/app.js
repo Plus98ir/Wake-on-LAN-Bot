@@ -10,6 +10,7 @@ const T = {
     pair: "➕ افزودن کامپیوتر", kill: "🛑 کیل‌سوییچ", events: "رویدادها و هشدارها",
     online: "روشن", offline: "خاموش", noagent: "فقط روشن کردن (بدون Agent)", none: "هنوز کامپیوتری نیست یا به تو دسترسی داده نشده.",
     apps: "برنامه‌ها", yes: "بله", no: "نه", ok: "باشه", fp: "اثر انگشت...", wait: "در حال اجرا...",
+    rescue: n => `🆘 ${n} می‌خواهد بعد از کیل‌سوییچ باز شود (رمز بازیابی پشت کامپیوتر زده شد)`, rescueBtn: "🔓 باز کردن قفل (اثر انگشت)",
     inc: "تغییر روی کامپیوتر - صفحه قفل شد", approve: "✅ تأیید (اثر انگشت)", deny: "⛔ رد", killIn: "بی‌جواب = کیل‌سوییچ",
     gate: "🧱 خود کامپیوتر تأیید می‌کند",
     kinds: {admins: "ادمین‌ها تغییر کردند", users: "کاربر جدید یا تغییر کاربر", firewall: "فایروال تغییر کرد", uac: "UAC تغییر کرد",
@@ -28,6 +29,7 @@ const T = {
     pair: "➕ Add PC", kill: "🛑 Kill switch", events: "Events and alerts",
     online: "online", offline: "offline", noagent: "wake only (no agent)", none: "No machines yet, or none given to you.",
     apps: "Apps", yes: "Yes", no: "No", ok: "OK", fp: "Fingerprint...", wait: "Working...",
+    rescue: n => `🆘 ${n} asks to unlock after the kill switch (recovery password typed at the PC)`, rescueBtn: "🔓 Unlock (fingerprint)",
     inc: "Change on the PC - screen locked", approve: "✅ Approve (fingerprint)", deny: "⛔ Deny", killIn: "no answer = kill switch",
     gate: "🧱 the PC approves itself",
     kinds: {admins: "Administrators changed", users: "New or changed user", firewall: "Firewall changed", uac: "UAC changed",
@@ -116,6 +118,13 @@ function render() {
   $("kill").classList.toggle("hide", !s.can_kill);
   const box = $("machines");
   box.innerHTML = s.machines.length ? "" : `<div class="empty">${esc(t.none)}</div>`;
+  for (const r of s.rescue || []) {
+    const c = document.createElement("div");
+    c.className = "card";
+    c.innerHTML = `<div class="inc"><b>${esc(t.rescue(r.name))}</b><small>${new Date(r.ts * 1000).toLocaleTimeString(L === "fa" ? "fa-IR" : "en-GB")}</small>
+      <div class="kb"><button class="wide" data-op="rs" data-i="${r.i}">${esc(t.rescueBtn)}</button></div></div>`;
+    box.appendChild(c);
+  }
   for (const m of s.machines) {
     const st = m.online === null ? `<span class="dot"></span>${esc(t.noagent)}`
       : m.online ? `<span class="dot on"></span>${esc(t.online)}` : `<span class="dot off"></span>${esc(t.offline)}`;

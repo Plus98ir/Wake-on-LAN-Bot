@@ -10,6 +10,7 @@
 //	wol-gate trust <https://auth-site> [--yes name,name]   pick which passkeys this PC trusts
 //	wol-gate list | untrust <name> | log
 //	wol-gate watch                    watchdog loop (task WOL\Watch, SYSTEM), see watch.go
+//	wol-gate set-recovery             set the password the red kill-switch screen asks for, see rescue.go
 package main
 
 import (
@@ -164,7 +165,11 @@ func verify(st *Store, s *State, r *Req) (*Key, error) {
 		return nil, errors.New("passkey not trusted on this PC")
 	}
 	now := time.Now().Unix()
-	if r.TS < now-maxAge || r.TS > now+60 {
+	age := int64(maxAge)
+	if r.Act == "unlock" { // rescue: the request waits while the network comes back and the owner reaches the phone
+		age = 600
+	}
+	if r.TS < now-age || r.TS > now+60 {
 		return k, errors.New("request too old")
 	}
 	if len(r.Nonce) < 16 || s.Nonces[r.Nonce] != 0 {
@@ -483,6 +488,14 @@ func main() {
 	switch os.Args[1] {
 	case "watch":
 		watchLoop()
+	case "rescue": // task WOL\Rescue (SYSTEM) after a kill switch
+		rescueServe(false)
+	case "rescue-ui": // task WOL\RescueUI (logged-on user): the red full-screen page
+		if err := rescueUI(true); err != nil {
+			logf("RESCUE UI: %v", err)
+		}
+	case "set-recovery":
+		setRecovery()
 	case "snapshot": // what the watchdog sees right now
 		s, err := snapshot()
 		if err != nil {
@@ -527,7 +540,7 @@ func main() {
 		b, _ := os.ReadFile(path("gate.log"))
 		os.Stdout.Write(b)
 	default:
-		fmt.Println("wol-gate trust <https://auth-site> [--yes name,name | --all] | list | untrust <name> | log | watch")
+		fmt.Println("wol-gate trust <https://auth-site> [--yes name,name | --all] | list | untrust <name> | log | watch | set-recovery")
 		os.Exit(2)
 	}
 }

@@ -47,7 +47,8 @@ NOTIFIED = {}            # stranger id -> last alert time
 PROTECT = "walRHckDpyu"  # buttons that need a fingerprint (config auth.protect overrides)
 OP_NAMES = {"w": "Wake", "a": "Start", "l": "Lock", "u": "Who", "R": "Restart", "H": "Shut down",
             "c": "Claude Remote", "k": "Stop Claude", "D": "Remove", "p": "Add PC (pair code)",
-            "y": "Relay code", "L": "Log in", "ap": "Approve change", "dn": "Deny change"}
+            "y": "Relay code", "L": "Log in", "ap": "Approve change", "dn": "Deny change",
+            "rs": "Unlock after the kill switch"}
 # What a limited user (config "users") may be given -> the buttons it opens. Admins can do everything.
 PERMS = {"wake": "w", "apps": "a", "claude": "ck", "lock": "l", "who": "u", "restart": "rR",
          "shutdown": "hH", "vscode": "v"}
@@ -280,6 +281,7 @@ def pc_run(m, cmd, timeout=20):
 # signature over exactly that action on exactly that PC (checked by the PC itself).
 GATE_ACTS = {"l": "lock", "u": "who", "R": "restart", "H": "shutdown", "c": "claude", "k": "claude_stop", "a": "app",
              "ap": "approve"}
+RESCUE = {}              # rescue id -> unlock request of a PC after a kill switch (recovery password typed there)
 INCIDENTS = {}           # machine name -> {"alive", "pending": [{id, kind, ts, kill}]} from the PC watchdog
 
 
@@ -1448,6 +1450,9 @@ def app_state(cfg, uid, exp):
     st = {"uid": uid, "name": u.get("name") or "admin", "admin": is_admin(cfg, uid), "locked": bool(a.get("locked")),
           "left": int(exp - time.time()), "protect": a.get("protect", PROTECT), "machines": machines,
           "can_pair": may(cfg, uid, "p"), "can_kill": may(cfg, uid, "x")}
+    names = {m["name"]: i for i, m in enumerate(cfg["machines"])}
+    st["rescue"] = [{"i": names[r["machine"]], "name": r["machine"], "ts": r["ts"]} for r in RESCUE.values()
+                    if st["admin"] and r["machine"] in names and not r["cred"] and r["exp"] > time.time()]
     if st["admin"]:
         try:
             with open(EVENTS) as f:
@@ -1564,6 +1569,20 @@ def auth_server(api):
                     WEB[token] = {"uid": str(key["owner"]), "exp": now + age}
                 log_event(f"🔓 App login by {key['owner']} ({key['name']}) from {self.ip()}")
                 return self.cookie(200, {"ok": True}, token, age)
+            if path == "/api/rescue":  # a killed PC whose owner typed the recovery password asks the phone
+                name, ts, nonce = str(body.get("machine", "")), body.get("ts"), str(body.get("nonce", ""))
+                m = next((x for x in cfg["machines"] if x["name"] == name and gated(x)), None)
+                if m is None or not isinstance(ts, int) or abs(ts - now) > 300 or not re.fullmatch(r"[\w-]{16,64}", nonce):
+                    return self.reply(400, {"error": "bad request"})
+                with LOCK:
+                    for k in [k for k, r in RESCUE.items() if r["exp"] < now or r["machine"] == name]:
+                        RESCUE.pop(k)
+                    if len(RESCUE) > 20:
+                        return self.reply(429, {"error": "busy"})
+                    rid = secrets.token_urlsafe(18)
+                    RESCUE[rid] = {"machine": name, "ts": ts, "nonce": nonce, "exp": now + 600, "cred": None}
+                notify(API, cfg, f"🆘 {name}: recovery password typed at the PC - approve the unlock with your fingerprint in the app.")
+                return self.reply(200, {"id": rid})
             token, s = self.session()
             if path == "/api/logout":
                 WEB.pop(token, None)
@@ -1581,8 +1600,21 @@ def auth_server(api):
                 data = op + (f":{i}" if i is not None else "") + (f":{int(j)}" if j is not None else "")
                 if not may(cfg, uid, "c" if op == "cs" else op, i):
                     return self.reply(403, {"error": "not allowed for you"})
-                if a.get("locked") and op not in ("s", "x"):
+                if a.get("locked") and op not in ("s", "x", "rs"):
                     return self.reply(423, {"error": "kill switch is on"})
+                if op == "rs":
+                    name = cfg["machines"][i]["name"]
+                    rid, r = next(((k, r) for k, r in RESCUE.items() if r["machine"] == name and r["exp"] > now
+                                   and not r["cred"]), (None, None))
+                    if not rid:
+                        return self.reply(410, {"error": "no unlock request from that PC"})
+                    cid = secrets.token_urlsafe(18)
+                    with LOCK:
+                        WEB_CONFIRMS[cid] = {"uid": uid, "data": data, "label": action_label(cfg, data), "exp": now + AUTH_TTL,
+                                             "rescue": rid, "challenge": bound_challenge(name, "unlock", "", r["ts"], r["nonce"])}
+                    return self.reply(200, {"need": "fp", "id": cid, "challenge": WEB_CONFIRMS[cid]["challenge"],
+                                            "rpId": rp(a)[0], "label": WEB_CONFIRMS[cid]["label"],
+                                            "allow": [k["id"] for k in user_keys(cfg, uid)]})
                 g = gate_req(cfg, data)
                 if not needs_auth(cfg, op) and not g:
                     return self.reply(200, {"note": run_action(cfg, uid, data)})
@@ -1610,7 +1642,7 @@ def auth_server(api):
                 try:
                     with LOCK:
                         cfg = load()
-                        if auth_cfg(cfg).get("locked"):
+                        if auth_cfg(cfg).get("locked") and not c.get("rescue"):
                             raise ValueError("kill switch is on")
                         key = next((k for k in user_keys(cfg, uid) if k["id"] == body.get("cred", {}).get("id")), None)
                         if key is None:
@@ -1623,6 +1655,18 @@ def auth_server(api):
                     return self.reply(403, {"error": str(e)[:120] or "bad signature"})
                 if action_label(cfg, c["data"]) != c["label"]:
                     return self.reply(409, {"error": "the machine list changed, try again"})
+                if c.get("rescue"):  # hand the signature to the PC (it checks it itself) and unlock the server
+                    r = RESCUE.get(c["rescue"])
+                    if not r:
+                        return self.reply(410, {"error": "the unlock request expired, type the password at the PC again"})
+                    r["cred"] = body["cred"]
+                    with LOCK:
+                        cfg = load()
+                        cfg["auth"]["locked"] = False
+                        save(cfg)
+                        AUTH_FAILS.clear()
+                    log_event(f"🔓 Unlock of {r['machine']} approved by {uid} - the PC brings its connections back")
+                    return self.reply(200, {"note": "✅ Approved. The PC checks it and brings every connection back."})
                 s["exp"] = max(s["exp"], now + 60 * int(a.get("session_min", 10)))  # a fingerprint extends the login
                 proof = dict(c["gate"], cred=body["cred"]) if c.get("gate") else None
                 return self.reply(200, {"note": run_action(cfg, uid, c["data"], proof)})
@@ -1634,6 +1678,12 @@ def auth_server(api):
             path = urllib.parse.urlsplit(self.path).path
             if path in APP_FILES:
                 return self.static(path)
+            m = re.fullmatch(r"/api/rescue/([\w-]{20,40})", path)
+            if m:  # the killed PC waits for the phone's signature (it checks it itself)
+                r = RESCUE.get(m.group(1))
+                if not r:
+                    return self.reply(404, {"error": "unknown"})
+                return self.reply(200, {"status": "approved" if r["cred"] else "waiting", "cred": r["cred"]})
             if path == "/api/pubkeys":  # public keys only: each PC picks which it trusts (wol-gate trust)
                 return self.reply(200, [{f: k[f] for f in ("id", "pub", "alg", "name", "owner")}
                                         for k in (a or {}).get("keys", [])])
