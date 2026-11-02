@@ -48,7 +48,7 @@ PROTECT = "walRHckDpyu"  # buttons that need a fingerprint (config auth.protect 
 OP_NAMES = {"w": "Wake", "a": "Start", "l": "Lock", "u": "Who", "R": "Restart", "H": "Shut down",
             "c": "Claude Remote", "k": "Stop Claude", "D": "Remove", "p": "Add PC (pair code)",
             "y": "Relay code", "L": "Log in", "ap": "Approve change", "dn": "Deny change",
-            "rs": "Unlock after the kill switch"}
+            "rs": "Unlock after the kill switch", "x": "Kill switch"}
 # What a limited user (config "users") may be given -> the buttons it opens. Admins can do everything.
 PERMS = {"wake": "w", "apps": "a", "claude": "ck", "lock": "l", "who": "u", "restart": "rR",
          "shutdown": "hH", "vscode": "v"}
