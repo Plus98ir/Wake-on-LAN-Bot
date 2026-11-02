@@ -47,7 +47,7 @@ NOTIFIED = {}            # stranger id -> last alert time
 PROTECT = "walRHckDpyu"  # buttons that need a fingerprint (config auth.protect overrides)
 OP_NAMES = {"w": "Wake", "a": "Start", "l": "Lock", "u": "Who", "R": "Restart", "H": "Shut down",
             "c": "Claude Remote", "k": "Stop Claude", "D": "Remove", "p": "Add PC (pair code)",
-            "y": "Relay code", "L": "Log in"}
+            "y": "Relay code", "L": "Log in", "ap": "Approve change", "dn": "Deny change"}
 # What a limited user (config "users") may be given -> the buttons it opens. Admins can do everything.
 PERMS = {"wake": "w", "apps": "a", "claude": "ck", "lock": "l", "who": "u", "restart": "rR",
          "shutdown": "hH", "vscode": "v"}
@@ -278,7 +278,9 @@ def pc_run(m, cmd, timeout=20):
 
 # PCs with wol-gate.exe accept only JSON requests; changing actions must carry a passkey
 # signature over exactly that action on exactly that PC (checked by the PC itself).
-GATE_ACTS = {"l": "lock", "u": "who", "R": "restart", "H": "shutdown", "c": "claude", "k": "claude_stop", "a": "app"}
+GATE_ACTS = {"l": "lock", "u": "who", "R": "restart", "H": "shutdown", "c": "claude", "k": "claude_stop", "a": "app",
+             "ap": "approve"}
+INCIDENTS = {}           # machine name -> {"alive", "pending": [{id, kind, ts, kill}]} from the PC watchdog
 
 
 def gated(m):
@@ -299,6 +301,12 @@ def gate_req(cfg, data):
     if not gated(m):
         return None
     arg = ""
+    if parts[0] == "ap":  # approve the j-th change the PC's watchdog reported
+        j = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else -1
+        pend = (INCIDENTS.get(m["name"]) or {}).get("pending", [])
+        if not 0 <= j < len(pend):
+            return None
+        arg = pend[j]["id"]
     if parts[0] == "a":
         names = list(apps(m))
         j = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else -1
@@ -686,6 +694,7 @@ def serve():
     pair_server(api)
     auth_server(api)
     threading.Thread(target=ip_watch, daemon=True).start()
+    threading.Thread(target=incident_watch, daemon=True).start()
     if api is None:
         print(f"wolbot started (app only at {auth_cfg(cfg)['url']}, {len(cfg['machines'])} machines)", flush=True)
         while True:
@@ -822,6 +831,41 @@ def relay_poll(cfg, qs):
         if macs or time.time() > end:
             return {"wake": macs}
         time.sleep(1)
+
+
+def incident_watch():
+    """Ask every gated PC's watchdog for changes waiting for the owner; alert on new ones."""
+    told = set()
+    while True:
+        time.sleep(15)
+        try:
+            cfg = load()
+            for m in cfg["machines"]:
+                if not gated(m) or not online(m):
+                    INCIDENTS.pop(m["name"], None)
+                    continue
+                rc, out = gate_call(m, {"act": "incidents"})
+                try:
+                    st = json.loads(out) if rc == 0 else None
+                except ValueError:
+                    st = None
+                if not st:
+                    continue
+                INCIDENTS[m["name"]] = st
+                for p in st.get("pending", []):
+                    if p["id"] not in told:
+                        told.add(p["id"])
+                        notify(API, cfg, f"⚠️ {m['name']}: change detected ({p['kind']}) - screen locked. "
+                                         "Approve with your fingerprint or deny in the app"
+                                         + (" (no answer in 3 min = kill switch)." if p.get("kill") else "."))
+                key = "dead:" + m["name"]
+                if time.time() - st.get("alive", 0) > 120 and key not in told:
+                    told.add(key)
+                    notify(API, cfg, f"⚠️ {m['name']}: the watchdog is not running (task WOL\\Watch).")
+                elif time.time() - st.get("alive", 0) <= 120:
+                    told.discard(key)
+        except Exception as e:  # noqa: BLE001 - never let the watcher die
+            print(f"incident_watch: {e}", flush=True)
 
 
 def ip_watch():
@@ -1328,6 +1372,13 @@ def run_action(cfg, uid, data, proof=None):
         if op == "u" and rc == 0:
             return out[-800:] or "(nobody logged on)"
         return f"{OP_NAMES.get(op, op)}: " + ("done ✅ (checked by the PC itself)" if rc == 0 else f"refused by the PC ({out[-200:]})")
+    if gated(m) and op == "dn":
+        pend = (INCIDENTS.get(m["name"]) or {}).get("pending", [])
+        j = int(parts[2]) if len(parts) > 2 else -1
+        if not 0 <= j < len(pend):
+            return "that change is no longer pending"
+        rc, out = gate_call(m, {"act": "deny", "arg": pend[j]["id"]})
+        return "⛔ " + out[-200:]
     if gated(m) and op == "cs":
         rc, out = gate_call(m, {"act": "cs"})
         out = ANSI.sub("", out)
@@ -1391,7 +1442,8 @@ def app_state(cfg, uid, exp):
         btns = [o for o in UI_OPS if may(cfg, uid, o, i) and (o in "wyD" or m.get("pc"))
                 and (o not in "ck" or "claude" in actions(m))]
         machines.append({"i": i, "name": m["name"], "mac": m["mac"], "online": online(m), "btns": btns,
-                         "apps": list(apps(m)) if "a" in btns else []})
+                         "apps": list(apps(m)) if "a" in btns else [], "gate": gated(m),
+                         "incidents": (INCIDENTS.get(m["name"]) or {}).get("pending", []) if is_admin(cfg, uid) else []})
     u = user_of(cfg, uid) or {}
     st = {"uid": uid, "name": u.get("name") or "admin", "admin": is_admin(cfg, uid), "locked": bool(a.get("locked")),
           "left": int(exp - time.time()), "protect": a.get("protect", PROTECT), "machines": machines,

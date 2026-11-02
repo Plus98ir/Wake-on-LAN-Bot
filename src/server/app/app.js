@@ -10,7 +10,12 @@ const T = {
     pair: "➕ افزودن کامپیوتر", kill: "🛑 کیل‌سوییچ", events: "رویدادها و هشدارها",
     online: "روشن", offline: "خاموش", noagent: "فقط روشن کردن (بدون Agent)", none: "هنوز کامپیوتری نیست یا به تو دسترسی داده نشده.",
     apps: "برنامه‌ها", yes: "بله", no: "نه", ok: "باشه", fp: "اثر انگشت...", wait: "در حال اجرا...",
-    sure: {R: "ری‌استارت شود؟", H: "خاموش شود؟", D: "از لیست حذف شود؟", x: "کیل‌سوییچ: همه‌ی کامپیوترها قفل و از شبکه جدا می‌شوند و همه‌ی دستورها بسته می‌شوند. مطمئنی؟"},
+    inc: "تغییر روی کامپیوتر - صفحه قفل شد", approve: "✅ تأیید (اثر انگشت)", deny: "⛔ رد", killIn: "بی‌جواب = کیل‌سوییچ",
+    gate: "🧱 خود کامپیوتر تأیید می‌کند",
+    kinds: {admins: "ادمین‌ها تغییر کردند", users: "کاربر جدید یا تغییر کاربر", firewall: "فایروال تغییر کرد", uac: "UAC تغییر کرد",
+            rdp: "ریموت دسکتاپ تغییر کرد", keys: "کلیدهای SSH یا تنظیمات sshd تغییر کرد", trusted: "Passkeyهای مورد اعتماد تغییر کرد",
+            remote: "یک ابزار ریموت اجرا شد", failed: "تلاش ناموفق ورود به ویندوز", services: "سرویس جدید یا حذف‌شده", tasks: "تسک زمان‌بندی‌شده‌ی جدید"},
+    sure: {R: "ری‌استارت شود؟", H: "خاموش شود؟", D: "از لیست حذف شود؟", dn: "این تغییر رد شود؟ کیل‌سوییچ این کامپیوتر زده می‌شود.", x: "کیل‌سوییچ: همه‌ی کامپیوترها قفل و از شبکه جدا می‌شوند و همه‌ی دستورها بسته می‌شوند. مطمئنی؟"},
     cancel: "لغو شد", noPk: "مرورگر Passkey ندارد. با Chrome یا Safari باز کن.", out: "زمان ورود تمام شد، دوباره وارد شو.",
     b: {w: "⚡ روشن کردن", s: "🔄 تازه‌سازی", c: "🤖 Claude Remote", k: "⏹ توقف Claude", l: "🔒 قفل", u: "👤 چه کسی؟",
         R: "🔁 ری‌استارت", H: "⏻ خاموش", v: "💻 VS Code", y: "📡 رله", D: "🗑 حذف"}
@@ -23,7 +28,12 @@ const T = {
     pair: "➕ Add PC", kill: "🛑 Kill switch", events: "Events and alerts",
     online: "online", offline: "offline", noagent: "wake only (no agent)", none: "No machines yet, or none given to you.",
     apps: "Apps", yes: "Yes", no: "No", ok: "OK", fp: "Fingerprint...", wait: "Working...",
-    sure: {R: "Restart it?", H: "Shut it down?", D: "Remove it from the list?", x: "Kill switch: every PC locks and goes offline and every action is blocked. Sure?"},
+    inc: "Change on the PC - screen locked", approve: "✅ Approve (fingerprint)", deny: "⛔ Deny", killIn: "no answer = kill switch",
+    gate: "🧱 the PC approves itself",
+    kinds: {admins: "Administrators changed", users: "New or changed user", firewall: "Firewall changed", uac: "UAC changed",
+            rdp: "Remote Desktop changed", keys: "SSH keys or sshd settings changed", trusted: "Trusted passkeys changed",
+            remote: "A remote-control tool is running", failed: "Failed Windows logon", services: "Service added or removed", tasks: "New scheduled task"},
+    sure: {R: "Restart it?", H: "Shut it down?", D: "Remove it from the list?", dn: "Deny this change? This PC's kill switch starts.", x: "Kill switch: every PC locks and goes offline and every action is blocked. Sure?"},
     cancel: "Cancelled", noPk: "This browser has no passkeys. Open it in Chrome or Safari.", out: "Your login ended, log in again.",
     b: {w: "⚡ Wake", s: "🔄 Refresh", c: "🤖 Claude Remote", k: "⏹ Stop Claude", l: "🔒 Lock", u: "👤 Who",
         R: "🔁 Restart", H: "⏻ Shut down", v: "💻 VS Code", y: "📡 Relay", D: "🗑 Remove"}
@@ -122,9 +132,16 @@ function render() {
     }
     const rest = order.filter(o => o !== "w");
     rest.forEach((o, k) => kb += b(o, t.b[o], rest.length % 2 && k === rest.length - 1 ? "wide" : ""));
+    let inc = "";
+    (m.incidents || []).forEach((p, j) => {
+      inc += `<div class="inc"><b>⚠️ ${esc(t.kinds[p.kind] || p.kind)}</b>
+        <small>${esc(t.inc)} · ${new Date(p.ts * 1000).toLocaleTimeString(L === "fa" ? "fa-IR" : "en-GB")}${p.kill ? " · " + esc(t.killIn) : ""}</small>
+        <div class="kb"><button data-op="ap" data-i="${m.i}" data-j="${j}">${esc(t.approve)}</button>
+        <button data-op="dn" data-i="${m.i}" data-j="${j}">${esc(t.deny)}</button></div></div>`;
+    });
     const card = document.createElement("div");
     card.className = "card";
-    card.innerHTML = `<div class="status"><div class="nm">🖥 ${esc(m.name)}</div><div class="mac">${esc(m.mac)}</div>
+    card.innerHTML = `${inc}<div class="status"><div class="nm">🖥 ${esc(m.name)}</div><div class="mac">${esc(m.mac)}${m.gate ? " · " + esc(t.gate) : ""}</div>
       <div>${st}</div>${notes[m.i] ? `<div class="note">${link(notes[m.i])}</div>` : ""}</div><div class="kb">${kb}</div>`;
     box.appendChild(card);
   }

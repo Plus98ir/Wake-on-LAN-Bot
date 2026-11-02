@@ -9,6 +9,7 @@
 //	wol-gate                          (forced command) one request as JSON on stdin
 //	wol-gate trust <https://auth-site> [--yes name,name]   pick which passkeys this PC trusts
 //	wol-gate list | untrust <name> | log
+//	wol-gate watch                    watchdog loop (task WOL\Watch, SYSTEM), see watch.go
 package main
 
 import (
@@ -49,8 +50,9 @@ const (
 )
 
 // actions that need a signature, and the ones a server may ask for without one
-var signed = map[string]bool{"lock": true, "restart": true, "shutdown": true, "who": true, "app": true, "claude": true, "claude_stop": true}
-var open = map[string]bool{"ping": true, "apps": true, "ip": true, "cs": true, "kill": true}
+var signed = map[string]bool{"lock": true, "restart": true, "shutdown": true, "who": true, "app": true, "claude": true,
+	"claude_stop": true, "approve": true}
+var open = map[string]bool{"ping": true, "apps": true, "ip": true, "cs": true, "kill": true, "incidents": true, "deny": true}
 
 type Key struct {
 	ID    string   `json:"id"`
@@ -247,6 +249,9 @@ func encodedPS(script string) string {
 
 func kill(reason string) {
 	logf("KILL SWITCH: %s", reason)
+	if os.Getenv("WOLGATE_DIR") != "" { // tests never cut the real PC off
+		return
+	}
 	tellDesk("KILL SWITCH - " + reason)
 	run("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPS(killPS))
 }
@@ -312,6 +317,12 @@ func act(r *Req) (string, error) {
 			return "", errors.New("bad app name")
 		}
 		return run("schtasks", "/run", "/tn", `WOL\`+r.Arg)
+	case "incidents":
+		return incidents(), nil
+	case "approve":
+		return approve(r.Arg)
+	case "deny":
+		return deny(r.Arg), nil
 	case "claude":
 		return run("schtasks", "/run", "/tn", `WOL\Claude`)
 	case "claude_stop":
@@ -329,7 +340,7 @@ func serve() int {
 		return 3
 	}
 	if open[r.Act] {
-		if r.Act != "ping" && r.Act != "ip" && r.Act != "apps" && r.Act != "cs" {
+		if r.Act == "kill" || r.Act == "deny" {
 			logf("open action %s", r.Act)
 		}
 		out, err := act(&r)
@@ -470,6 +481,16 @@ func main() {
 	var st Store
 	readJSON("gate-keys.json", &st)
 	switch os.Args[1] {
+	case "watch":
+		watchLoop()
+	case "snapshot": // what the watchdog sees right now
+		s, err := snapshot()
+		if err != nil {
+			fmt.Println("error:", err)
+			os.Exit(1)
+		}
+		b, _ := json.MarshalIndent(s, "", "  ")
+		os.Stdout.Write(b)
 	case "trust":
 		if len(os.Args) < 3 {
 			fmt.Println("wol-gate trust <https://auth-site> [--yes name,name | --all]")
@@ -506,7 +527,7 @@ func main() {
 		b, _ := os.ReadFile(path("gate.log"))
 		os.Stdout.Write(b)
 	default:
-		fmt.Println("wol-gate trust <https://auth-site> [--yes name,name] | list | untrust <name> | log")
+		fmt.Println("wol-gate trust <https://auth-site> [--yes name,name | --all] | list | untrust <name> | log | watch")
 		os.Exit(2)
 	}
 }

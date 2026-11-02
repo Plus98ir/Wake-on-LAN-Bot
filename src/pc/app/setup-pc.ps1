@@ -328,7 +328,14 @@ function Set-Gate($url) {
   $lines = Get-Content $AdminKeys | ForEach-Object { if ($_ -like $match) { $force + ($_ -replace '^command="[^"]*",\S* ', '') } else { $_ } }
   Set-Content $AdminKeys $lines -Encoding ascii
   Lock-Acl $AdminKeys
-  Write-Host "  gate on: the server can only run signed actions on this PC" -ForegroundColor Green
+  # watchdog: changes to admins, keys, firewall, UAC, remote tools... lock the screen and wait for a fingerprint
+  $wa = New-ScheduledTaskAction -Execute "$Agent\wol-gate.exe" -Argument "watch"
+  $ws = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+  Register-ScheduledTask -TaskPath "\WOL\" -TaskName "Watch" -Action $wa -Trigger (New-ScheduledTaskTrigger -AtStartup) `
+    -Principal (New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest) -Settings $ws -Force | Out-Null
+  Stop-ScheduledTask -TaskPath "\WOL\" -TaskName "Watch" -ErrorAction SilentlyContinue
+  Start-ScheduledTask -TaskPath "\WOL\" -TaskName "Watch"
+  Write-Host "  gate on: the server can only run signed actions on this PC; watchdog running" -ForegroundColor Green
 }
 
 if ($Uninstall) {
