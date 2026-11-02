@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>wolbot</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<style>
+:root{--bg:#0d1117;--card:#161b22;--card2:#0b0f14;--btn:#21262d;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;
+  --acc:#2f81f7;--acc2:#7c3aed;--ok:#3fb950;--err:#f85149;--warn:#d29922;
+  --font:"Segoe UI",Tahoma,"Vazirmatn",system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 var(--font);padding-bottom:env(safe-area-inset-bottom)}
+button{font:inherit;color:inherit;cursor:pointer}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:12px 32px;padding-top:max(12px,env(safe-area-inset-top));
+  background:rgba(13,17,23,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+header img{width:34px;height:34px;border-radius:9px}
+header b{font-size:18px}
+header .sp{flex:1}
+.chip{border:1px solid var(--line);background:none;border-radius:8px;padding:5px 12px;font-size:14px;color:var(--mut)}
+.chip:hover{color:var(--fg);border-color:var(--acc)}
+#who{font-size:13px;color:var(--mut);direction:ltr}
+main{width:100%;padding:24px 32px}
+.hide{display:none!important}
+/* login */
+#login{min-height:calc(100vh - 140px);display:grid;place-items:center;text-align:center}
+#login .fp{width:132px;height:132px;border-radius:50%;border:0;font-size:64px;color:#fff;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 12px 50px #4b5bff55;transition:transform .15s}
+#login .fp:active{transform:scale(.95)}
+#login h1{font-size:26px;margin:24px 0 6px}
+#login p{color:var(--mut);margin:0 0 6px}
+/* bars */
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:18px}
+.bar .sp{flex:1}
+.banner{background:#3d1214;border:1px solid var(--err);color:#ffb3ad;border-radius:12px;padding:12px 16px;margin-bottom:18px}
+.tool{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 16px}
+.tool.kill{border-color:#6e2a2a;color:#ff8f88}
+/* machines */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;align-items:start}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
+.status{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px;direction:ltr;text-align:left}
+.status .nm{font-weight:700;font-size:17px}
+.status .mac{color:var(--mut);font-size:13px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin:0 6px 0 0;vertical-align:middle;background:var(--mut)}
+.dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok)}.dot.off{background:var(--err)}
+.note{white-space:pre-wrap;word-break:break-word;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:14px}
+.note a{color:var(--acc)}
+.kb{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.kb button{background:var(--btn);border:1px solid var(--line);border-radius:10px;padding:11px 8px;font-size:15px;position:relative;min-height:46px}
+.kb button:hover{border-color:#484f58}
+.kb button.wide{grid-column:1/-1}
+.kb button.busy{opacity:.55;pointer-events:none}
+.kb button .lk{position:absolute;top:3px;inset-inline-end:6px;font-size:11px;opacity:.7}
+.kb .sec{grid-column:1/-1;color:var(--mut);font-size:13px;margin:4px 2px 0}
+/* events */
+details{margin-top:24px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 16px}
+summary{cursor:pointer;font-weight:600}
+.ev{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.ev:last-child{border:0}
+.ev time{color:var(--mut);white-space:nowrap;direction:ltr}
+.ev span{white-space:pre-wrap;word-break:break-word;direction:ltr;text-align:start;unicode-bidi:plaintext}
+/* modal + toast */
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;place-items:center;z-index:20;padding:16px}
+#modal .box{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;width:min(560px,100%)}
+#modal .txt{white-space:pre-wrap;word-break:break-word;margin-bottom:18px;max-height:60vh;overflow:auto;unicode-bidi:plaintext}
+#modal .row{display:flex;gap:10px;justify-content:flex-end}
+.pri{background:linear-gradient(90deg,var(--acc),var(--acc2));border:0;color:#fff;border-radius:10px;padding:10px 20px;font-weight:600}
+.pri.red{background:var(--err)}
+.sec2{background:var(--btn);border:1px solid var(--line);border-radius:10px;padding:10px 20px}
+#toast{position:fixed;bottom:max(20px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:#1f2937;border:1px solid var(--line);
+  padding:10px 18px;border-radius:12px;z-index:30;max-width:90vw;font-size:14px}
+#toast.err{border-color:var(--err);color:#ffb3ad}
+.empty{color:var(--mut);text-align:center;padding:40px 0}
+@media(max-width:700px){header,main{padding-left:16px;padding-right:16px}.grid{grid-template-columns:1fr}#who{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <img src="/icon-192.png" alt="">
+  <b>wolbot</b>
+  <span class="sp"></span>
+  <span id="who"></span>
+  <button class="chip hide" id="install"></button>
+  <button class="chip" id="lang"></button>
+  <button class="chip hide" id="logout"></button>
+</header>
+<main>
+  <section id="login" class="hide">
+    <div>
+      <button class="fp" id="fp" aria-label="login">👆</button>
+      <h1 data-t="loginT"></h1>
+      <p data-t="loginD"></p>
+    </div>
+  </section>
+  <section id="app" class="hide">
+    <div class="banner hide" id="locked" data-t="locked"></div>
+    <div class="bar">
+      <span id="hello"></span>
+      <span class="sp"></span>
+      <button class="tool hide" id="pair" data-t="pair"></button>
+      <button class="tool kill hide" id="kill" data-t="kill"></button>
+    </div>
+    <div class="grid" id="machines"></div>
+    <details id="events" class="hide"><summary data-t="events"></summary><div id="evlist"></div></details>
+  </section>
+</main>
+<div id="modal" class="hide"><div class="box"><div class="txt" id="mtxt"></div><div class="row" id="mrow"></div></div></div>
+<div id="toast" class="hide"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -72,6 +72,9 @@ wolbot kill | unlock
 ```
 Config: `/etc/wol-bot/config.json`. Service: `systemctl status wol-bot`. Uninstall: `bash install.sh --uninstall`.
 
+### Phone app (PWA) - no Bale / Telegram needed
+After `wolbot auth https://auth.example.com`, that address is also an installable phone app: open it in Chrome / Safari, **Add to Home screen**, log in with your fingerprint. Same buttons as the bot, live status every 5 s, the fingerprint prompt right inside the app, admins see the events log. Without a bot token (`token` empty in the config) wolbot runs as the app only. Login = passkey (no password), session cookie `HttpOnly; Secure; SameSite=Strict`, every request needs the app's own header and origin.
+
 ### Fingerprint confirmation and kill switch (optional, recommended)
 With it on, every button that does something (wake, apps, lock, who, restart, shut down, Claude, add PC, relay, remove) first answers with **🔐 Confirm with fingerprint**. The link opens a page on your own domain, your phone asks for your fingerprint (a passkey, WebAuthn) and only then the command runs. Someone who gets into your Bale/Telegram account still cannot do anything without your phone and your finger.
 
@@ -159,6 +162,9 @@ sudo bash install.sh --token <توکن-بات> --public-host <آی‌پی-سرو
 - **OpenWrt:** `wolbot add-wake <اسم> ssh <آدرس> <پورت> root br-lan`
 
 > بعضی مودم‌ها چند دقیقه بعد از خاموش شدن کامپیوتر آدرسش را فراموش می‌کنند. اگر بعد از مدت طولانی روشن نشد، از رله استفاده کن.
+
+### اپ گوشی (PWA) - بدون بله و تلگرام
+بعد از `wolbot auth https://auth.example.com` همان آدرس یک اپ نصب‌شدنی است: در Chrome یا Safari بازش کن، **Add to Home screen** بزن و با اثر انگشت وارد شو. همان دکمه‌های بات، وضعیت زنده هر ۵ ثانیه، اثر انگشت داخل خود اپ و فهرست رویدادها برای ادمین. اگر توکن بات خالی باشد، wolbot فقط به‌صورت اپ کار می‌کند.
 
 ### تأیید با اثر انگشت و کیل‌سوییچ (اختیاری، پیشنهادی)
 وقتی روشن باشد، هر دکمه‌ای که کاری انجام می‌دهد (روشن، برنامه‌ها، قفل، Who، ری‌استارت، خاموش، Claude، Add PC، Relay، حذف) اول دکمه‌ی **🔐 Confirm with fingerprint** می‌دهد. لینک یک صفحه روی دامنه‌ی خودت باز می‌کند، گوشی اثر انگشتت را می‌خواهد (Passkey) و فقط بعد از آن دستور اجرا می‌شود. کسی که حساب بله‌ات را داشته باشد، بدون گوشی و انگشت تو کاری نمی‌تواند بکند.

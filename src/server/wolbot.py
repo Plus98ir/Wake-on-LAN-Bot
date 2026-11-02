@@ -44,7 +44,7 @@ CONFIRMS = {}            # confirmation token -> the button press waiting for a 
 ENROLL_CH = {}           # sign-up code -> challenge of the open sign-up page
 AUTH_FAILS = []          # times of failed checks (kill switch)
 NOTIFIED = {}            # stranger id -> last alert time
-PROTECT = "walRHckDpy"   # buttons that need a fingerprint (config auth.protect overrides)
+PROTECT = "walRHckDpyu"  # buttons that need a fingerprint (config auth.protect overrides)
 OP_NAMES = {"w": "Wake", "a": "Start", "l": "Lock", "u": "Who", "R": "Restart", "H": "Shut down",
             "c": "Claude Remote", "k": "Stop Claude", "D": "Remove", "p": "Add PC (pair code)",
             "y": "Relay code", "L": "Log in"}
@@ -52,6 +52,19 @@ OP_NAMES = {"w": "Wake", "a": "Start", "l": "Lock", "u": "Who", "R": "Restart", 
 PERMS = {"wake": "w", "apps": "a", "claude": "ck", "lock": "l", "who": "u", "restart": "rR",
          "shutdown": "hH", "vscode": "v"}
 SESSIONS = {}            # user id -> end of the fingerprint login
+# Phone app (PWA) served on the auth site: no Bale / Telegram needed.
+APP_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "app")
+APP_FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript"),
+             "/sw.js": ("sw.js", "text/javascript"), "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+             "/icon-192.png": ("icon-192.png", "image/png"), "/icon-512.png": ("icon-512.png", "image/png")}
+APP_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+           "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+EVENTS = os.path.join(HOME, "events.json")        # alerts shown in the app
+WEB = {}                 # app session token -> {"uid", "exp"}
+WEB_CONFIRMS = {}        # app confirmation id -> button press waiting for a fingerprint
+LOGIN_CH = {}            # app login id -> {"challenge", "exp"}
+API = None               # the Bale / Telegram bot, None in app-only mode
+UI_OPS = ["w", "a", "c", "k", "l", "u", "R", "H", "v", "y", "D"]   # machine buttons in app order
 
 CLAUDE_PS = r"powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\wol-agent\wol-claude.ps1"
 
@@ -625,14 +638,19 @@ def handle_callback(api, cfg, cb, confirmed=False):
 
 
 def serve():
+    global API
     cfg = load()
-    if not cfg.get("token"):
-        raise SystemExit("No bot token in config. Run: wolbot set-token <token>")
-    api = Api(cfg)
+    if not cfg.get("token") and not auth_cfg(cfg):
+        raise SystemExit("Nothing to run: set a bot token (wolbot set-token) or the app site (wolbot auth <url>)")
+    api = API = Api(cfg) if cfg.get("token") else None
     offset = 0
     pair_server(api)
     auth_server(api)
     threading.Thread(target=ip_watch, daemon=True).start()
+    if api is None:
+        print(f"wolbot started (app only at {auth_cfg(cfg)['url']}, {len(cfg['machines'])} machines)", flush=True)
+        while True:
+            time.sleep(3600)
     print(f"wolbot started ({cfg.get('api', 'bale')}, {len(cfg['machines'])} machines)", flush=True)
     while True:
         try:
@@ -842,6 +860,8 @@ def pair_server(api):
             self.reply(200, out)
             note = ("✅ Relay linked. Wake now goes through it." if relay
                     else "✅ New PC paired. It shows online once its tunnel is up.")
+            if api is None:
+                return log_event(f"{note} ({m['name']})")
             for a in cfg.get("admins", []):
                 try:
                     t, kb = machine_view(cfg, cfg["machines"].index(m), note)
@@ -953,8 +973,25 @@ def action_label(cfg, data):
     return name
 
 
+def log_event(text):
+    """Keep the last 200 alerts for the app (admins see them)."""
+    with LOCK:
+        try:
+            with open(EVENTS) as f:
+                ev = json.load(f)
+        except (OSError, ValueError):
+            ev = []
+        ev = (ev + [{"t": int(time.time()), "text": text}])[-200:]
+        with open(EVENTS, "w") as f:
+            json.dump(ev, f, ensure_ascii=False)
+        os.chmod(EVENTS, 0o600)
+
+
 def notify(api, cfg, text):
     print(text.replace("\n", " | "), flush=True)
+    log_event(text)
+    if api is None:  # app-only mode: no bot to send it through
+        return
     for a in cfg.get("admins", []):
         try:
             api.send(str(a).lstrip("b"), text)
@@ -1224,6 +1261,93 @@ paint();
 """
 
 
+# ---------- phone app (PWA) ----------
+
+def run_action(cfg, uid, data):
+    """One app button press (already allowed and, if needed, confirmed); returns the text to show."""
+    parts = data.split(":")
+    op = parts[0]
+    if op not in ("s", "cs"):  # those two are just looking
+        log_event(f"▶ {action_label(cfg, data)} (user {uid})")
+    if op == "x":
+        threading.Thread(target=kill, args=(API, f"pressed in the app by {uid}"), daemon=True).start()
+        return "🛑 Kill switch started."
+    if op == "p":
+        return pair_view(cfg)[0]
+    i = int(parts[1])
+    m = cfg["machines"][i]
+    if op == "w":
+        ok, report = wake(m)
+        return ("⚡ Magic packet sent." if ok else "❌ Wake failed.") + "\n" + "\n".join(report)
+    if op == "s":
+        if m.get("pc") and online(m):
+            sync_apps(cfg, m)
+        return ""
+    if op == "a":
+        names = list(apps(m))
+        j = int(parts[2])
+        if j >= len(names):
+            return "The app list changed - try again."
+        rc, out = pc_run(m, apps(m)[names[j]])
+        return f"▶️ {names[j]}: " + ("started" if rc == 0 else f"failed ({out[-200:]})")
+    if op in ("l", "u", "R", "H"):
+        key = {"l": "lock", "u": "who", "R": "restart", "H": "shutdown"}[op]
+        rc, out = pc_run(m, actions(m)[key])
+        if key == "who":
+            return out[-800:] or "(nobody logged on)"
+        return f"{key}: " + ("done" if rc == 0 else f"failed ({out[-200:]})")
+    if op == "c":
+        rc, out = pc_run(m, actions(m)["claude"])
+        return "🤖 Starting Claude Remote..." if rc == 0 else f"🤖 Claude: failed ({out[-200:]})"
+    if op == "cs":
+        rc, out = pc_run(m, actions(m)["claude_status"])
+        out = ANSI.sub("", out)
+        url = re.search(r"https://claude\.ai/\S+", out)
+        if url:
+            return f"🤖 Claude Remote Control is on: {url.group(0)}"
+        if out.startswith("running"):
+            return "🤖 Claude is running. Open the Claude app -> Code: the newest session is this PC."
+        return "🤖 " + (out[-400:] or "not running")
+    if op == "k":
+        rc, out = pc_run(m, actions(m)["claude_stop"])
+        return "⏹ Claude: " + (out[-200:] if rc == 0 else f"failed ({out[-200:]})")
+    if op == "y":
+        return relay_view(cfg, i)[0]
+    if op == "v":
+        return vscode_help(cfg, m)
+    if op == "D":
+        with LOCK:
+            c = load()
+            c["machines"] = [x for x in c["machines"] if x["name"] != m["name"]]
+            save(c)
+            write_tunnel_keys(c)
+        return f"Removed {m['name']}."
+    return "unknown button"
+
+
+def app_state(cfg, uid, exp):
+    a = auth_cfg(cfg)
+    machines = []
+    for i, m in enumerate(cfg["machines"]):
+        if not may(cfg, uid, "o", i):
+            continue
+        btns = [o for o in UI_OPS if may(cfg, uid, o, i) and (o in "wyD" or m.get("pc"))
+                and (o not in "ck" or "claude" in actions(m))]
+        machines.append({"i": i, "name": m["name"], "mac": m["mac"], "online": online(m), "btns": btns,
+                         "apps": list(apps(m)) if "a" in btns else []})
+    u = user_of(cfg, uid) or {}
+    st = {"uid": uid, "name": u.get("name") or "admin", "admin": is_admin(cfg, uid), "locked": bool(a.get("locked")),
+          "left": int(exp - time.time()), "protect": a.get("protect", PROTECT), "machines": machines,
+          "can_pair": may(cfg, uid, "p"), "can_kill": may(cfg, uid, "x")}
+    if st["admin"]:
+        try:
+            with open(EVENTS) as f:
+                st["events"] = json.load(f)[-40:][::-1]
+        except (OSError, ValueError):
+            st["events"] = []
+    return st
+
+
 def auth_server(api):
     """Confirmation pages behind the reverse proxy (Caddy): /a/<token> = confirm, /e/<code> = add a passkey."""
     a = auth_cfg(load())
@@ -1253,10 +1377,152 @@ def auth_server(api):
         def ip(self):
             return self.headers.get("X-Real-IP") or self.client_address[0]
 
+        # ----- phone app -----
+
+        def static(self, path):
+            name, ctype = APP_FILES[path]
+            try:
+                with open(os.path.join(APP_DIR, name), "rb") as f:
+                    body = f.read()
+            except OSError:
+                return self.reply(404, {"error": "app files missing - reinstall wolbot"})
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Security-Policy", APP_CSP)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def session(self):
+            """(token, session) of a logged-in app user, else (None, None)."""
+            for part in self.headers.get("Cookie", "").split(";"):
+                k, _, v = part.strip().partition("=")
+                if k == "wb_s":
+                    s = WEB.get(v)
+                    if s and s["exp"] > time.time() and known(load(), s["uid"]):
+                        return v, s
+            return None, None
+
+        def cookie(self, code, obj, token, age):
+            body = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Set-Cookie", f"wb_s={token}; Path=/; Max-Age={age}; HttpOnly; Secure; SameSite=Strict")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def app_post(self, path, body):
+            cfg = load()
+            a = auth_cfg(cfg)
+            # a custom header + same origin: other sites cannot send these requests
+            if self.headers.get("X-Wolbot") != "1" or self.headers.get("Origin", rp(a)[1]) != rp(a)[1]:
+                return self.reply(403, {"error": "bad origin"})
+            now = time.time()
+            if path == "/api/login/begin":
+                with LOCK:
+                    for k in [k for k, c in LOGIN_CH.items() if c["exp"] < now] + list(LOGIN_CH)[:-200]:
+                        LOGIN_CH.pop(k, None)
+                    cid = secrets.token_urlsafe(18)
+                    LOGIN_CH[cid] = {"challenge": b64u(secrets.token_bytes(32)), "exp": now + AUTH_TTL}
+                return self.reply(200, {"id": cid, "challenge": LOGIN_CH[cid]["challenge"], "rpId": rp(a)[0]})
+            if path == "/api/login/finish":
+                with LOCK:
+                    c = LOGIN_CH.pop(str(body.get("id")), None)
+                if not c or c["exp"] < now:
+                    return self.reply(410, {"error": "expired, try again"})
+                try:
+                    with LOCK:
+                        cfg = load()
+                        key = next((k for k in auth_cfg(cfg).get("keys", []) if k["id"] == body.get("cred", {}).get("id")), None)
+                        if key is None or not known(cfg, key["owner"]):
+                            raise ValueError("unknown passkey")
+                        key["count"] = verify_assertion(auth_cfg(cfg), key, c["challenge"], body["cred"])
+                        key["used"] = time.strftime("%Y-%m-%d %H:%M")
+                        save(cfg)
+                except Exception as e:  # noqa: BLE001 - any failure is a refused login
+                    auth_fail(API, f"app login: {str(e)[:80] or 'bad signature'} (from {self.ip()})")
+                    return self.reply(403, {"error": str(e)[:120] or "bad signature"})
+                age = 60 * int(a.get("session_min", 10))
+                token = secrets.token_urlsafe(32)
+                with LOCK:
+                    for k in [k for k, s in WEB.items() if s["exp"] < now]:
+                        WEB.pop(k)
+                    WEB[token] = {"uid": str(key["owner"]), "exp": now + age}
+                log_event(f"🔓 App login by {key['owner']} ({key['name']}) from {self.ip()}")
+                return self.cookie(200, {"ok": True}, token, age)
+            token, s = self.session()
+            if path == "/api/logout":
+                WEB.pop(token, None)
+                return self.cookie(200, {"ok": True}, "", 0)
+            if not s:
+                return self.reply(401, {"error": "log in"})
+            uid = s["uid"]
+            if path == "/api/begin":
+                op = str(body.get("op", ""))
+                i, j = body.get("i"), body.get("j")
+                if not re.fullmatch(r"[a-zA-Z]{1,2}", op) or (i is not None and not (isinstance(i, int) and 0 <= i < len(cfg["machines"]))):
+                    return self.reply(400, {"error": "bad button"})
+                if op not in ("x", "p") and i is None:
+                    return self.reply(400, {"error": "bad button"})
+                data = op + (f":{i}" if i is not None else "") + (f":{int(j)}" if j is not None else "")
+                if not may(cfg, uid, "c" if op == "cs" else op, i):
+                    return self.reply(403, {"error": "not allowed for you"})
+                if a.get("locked") and op not in ("s", "x"):
+                    return self.reply(423, {"error": "kill switch is on"})
+                if not needs_auth(cfg, op):
+                    return self.reply(200, {"note": run_action(cfg, uid, data)})
+                if not user_keys(cfg, uid):
+                    return self.reply(403, {"error": "no passkey for you"})
+                cid = secrets.token_urlsafe(18)
+                with LOCK:
+                    for k in [k for k, c in WEB_CONFIRMS.items() if c["exp"] < now]:
+                        WEB_CONFIRMS.pop(k)
+                    WEB_CONFIRMS[cid] = {"uid": uid, "data": data, "label": action_label(cfg, data),
+                                         "challenge": b64u(secrets.token_bytes(32)), "exp": now + AUTH_TTL}
+                c = WEB_CONFIRMS[cid]
+                return self.reply(200, {"need": "fp", "id": cid, "challenge": c["challenge"], "rpId": rp(a)[0],
+                                        "label": c["label"], "allow": [k["id"] for k in user_keys(cfg, uid)]})
+            if path == "/api/do":
+                with LOCK:
+                    c = WEB_CONFIRMS.pop(str(body.get("id")), None)  # one try
+                if not c or c["exp"] < now or c["uid"] != uid:
+                    return self.reply(410, {"error": "expired, press the button again"})
+                try:
+                    with LOCK:
+                        cfg = load()
+                        if auth_cfg(cfg).get("locked"):
+                            raise ValueError("kill switch is on")
+                        key = next((k for k in user_keys(cfg, uid) if k["id"] == body.get("cred", {}).get("id")), None)
+                        if key is None:
+                            raise ValueError("unknown passkey")
+                        key["count"] = verify_assertion(auth_cfg(cfg), key, c["challenge"], body["cred"])
+                        key["used"] = time.strftime("%Y-%m-%d %H:%M")
+                        save(cfg)
+                except Exception as e:  # noqa: BLE001
+                    auth_fail(API, f"{c['label']} (app): {str(e)[:80] or 'bad signature'} (from {self.ip()})")
+                    return self.reply(403, {"error": str(e)[:120] or "bad signature"})
+                if action_label(cfg, c["data"]) != c["label"]:
+                    return self.reply(409, {"error": "the machine list changed, try again"})
+                s["exp"] = max(s["exp"], now + 60 * int(a.get("session_min", 10)))  # a fingerprint extends the login
+                return self.reply(200, {"note": run_action(cfg, uid, c["data"])})
+            return self.reply(404, {"error": "not found"})
+
         def do_GET(self):  # noqa: N802 - http.server API
             cfg = load()
             a = auth_cfg(cfg)
             path = urllib.parse.urlsplit(self.path).path
+            if path in APP_FILES:
+                return self.static(path)
+            if path == "/api/state":
+                _, s = self.session()
+                if not s:
+                    return self.reply(401, {"error": "log in"})
+                return self.reply(200, app_state(cfg, s["uid"], s["exp"]))
             gone = {"mode": "gone"}
             m = re.fullmatch(r"/a/([\w-]{20,64})", path)
             if a and m:
@@ -1282,6 +1548,8 @@ def auth_server(api):
                 body = json.loads(self.rfile.read(n) or b"{}")
             except ValueError:
                 return self.reply(400, {"error": "bad request"})
+            if path.startswith("/api/"):
+                return self.app_post(path, body if isinstance(body, dict) else {})
             m = re.fullmatch(r"/a/([\w-]{20,64})", path)
             if m:
                 return self.confirm(m.group(1), body)
@@ -1309,8 +1577,9 @@ def auth_server(api):
                     save(cfg)
             except Exception as e:  # noqa: BLE001 - any failure is a refused check
                 self.reply(403, {"error": str(e)[:120] or "bad signature"})
-                api.edit(c["chat"], c["mid"], f"⛔ Fingerprint check failed: {c['label']}\nNothing was done.",
-                         [[btn("⬅️ Machines", "m")]])
+                if api:
+                    api.edit(c["chat"], c["mid"], f"⛔ Fingerprint check failed: {c['label']}\nNothing was done.",
+                             [[btn("⬅️ Machines", "m")]])
                 return auth_fail(api, f"{c['label']}: {str(e)[:80] or 'bad signature'} (from {self.ip()})")
             self.reply(200, {"ok": True})
             threading.Thread(target=run_confirmed, args=(api, c), daemon=True).start()
@@ -1342,6 +1611,9 @@ def auth_server(api):
             return None
 
         def log_message(self, fmt, *args):
+            path = urllib.parse.urlsplit(self.path).path
+            if path in APP_FILES or path == "/api/state":  # the app polls it every few seconds
+                return
             print(f"auth {self.ip()}: {fmt % args}"[:200], flush=True)
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", int(a.get("port", 8791))), Handler)

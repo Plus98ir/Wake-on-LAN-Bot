@@ -42,6 +42,8 @@ echo "[1/5] Files"
 install -d -m 755 "$DIR"
 install -m 755 "$SRC/wolbot.py" "$DIR/wolbot.py"
 install -m 644 "$SRC/relay.py" "$DIR/relay.py"
+install -d -m 755 "$DIR/app"
+install -m 644 "$SRC"/app/* "$DIR/app/"
 ln -sf "$DIR/wolbot.py" /usr/local/bin/wolbot
 install -d -m 700 "$ETC"
 [ -f "$ETC/id_ed25519" ] || ssh-keygen -q -t ed25519 -N "" -C "wolbot@$(hostname)" -f "$ETC/id_ed25519"
