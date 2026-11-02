@@ -3,6 +3,8 @@
 
 Config: /etc/wol-bot/config.json (WOLBOT_CONF overrides). Run `wolbot help` for commands.
 """
+import base64
+import hashlib
 import http.server
 import json
 import os
@@ -35,7 +37,51 @@ IP_CHECK = 300           # seconds between public-IP checks for auto UDP wake ta
 FAILS = {}               # client ip -> [fail times]
 LOCK = threading.Lock()
 
+# Fingerprint confirmation (passkeys). Off until `wolbot auth <https url>`.
+AUTH_TTL = 120           # a confirmation link lives 2 min and works once
+ENROLL = os.path.join(HOME, "passkey-codes.json")  # passkey sign-up code -> {exp, owner, name} (shared with the CLI)
+CONFIRMS = {}            # confirmation token -> the button press waiting for a fingerprint
+ENROLL_CH = {}           # sign-up code -> challenge of the open sign-up page
+AUTH_FAILS = []          # times of failed checks (kill switch)
+NOTIFIED = {}            # stranger id -> last alert time
+PROTECT = "walRHckDpy"   # buttons that need a fingerprint (config auth.protect overrides)
+OP_NAMES = {"w": "Wake", "a": "Start", "l": "Lock", "u": "Who", "R": "Restart", "H": "Shut down",
+            "c": "Claude Remote", "k": "Stop Claude", "D": "Remove", "p": "Add PC (pair code)",
+            "y": "Relay code"}
+
 CLAUDE_PS = r"powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\wol-agent\wol-claude.ps1"
+
+# Kill switch on Windows: writes wol-kill.ps1 / wol-unkill.ps1 and starts task WOL\Kill as SYSTEM,
+# so it keeps running after it cuts this very SSH session.
+KILL_PS = r'''$a = "$env:ProgramData\wol-agent"
+New-Item -ItemType Directory -Force $a | Out-Null
+@'
+# wolbot kill switch: cut every remote way in. Undo on the PC: wol-unkill.ps1 (as administrator)
+Add-Content "$env:ProgramData\wol-agent\kill.log" "$(Get-Date -Format s) kill switch"
+schtasks /run /tn "WOL\Lock" | Out-Null
+schtasks /change /tn "WOL\Tunnel" /disable | Out-Null
+schtasks /end /tn "WOL\Tunnel" | Out-Null
+Get-Process ssh -ErrorAction SilentlyContinue | Stop-Process -Force
+Set-Service sshd -StartupType Disabled
+Stop-Service sshd -Force
+Get-NetAdapter | Where-Object Status -ne Disabled | Disable-NetAdapter -Confirm:$false
+'@ | Set-Content "$a\wol-kill.ps1" -Encoding utf8
+@'
+# Undo the wolbot kill switch (run as administrator), then on the server: wolbot unlock
+Get-NetAdapter | Enable-NetAdapter -Confirm:$false
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+schtasks /change /tn "WOL\Tunnel" /enable | Out-Null
+schtasks /run /tn "WOL\Tunnel" | Out-Null
+'@ | Set-Content "$a\wol-unkill.ps1" -Encoding utf8
+foreach ($f in "wol-kill.ps1", "wol-unkill.ps1") { icacls "$a\$f" /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" | Out-Null }
+$act = New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$a\wol-kill.ps1`""
+$sys = New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskPath "\WOL\" -TaskName Kill -Action $act -Principal $sys -Force | Out-Null
+Start-ScheduledTask -TaskPath "\WOL\" -TaskName Kill
+'''
+KILL_CMD = ("powershell -NoProfile -NonInteractive -EncodedCommand "
+            + base64.b64encode(KILL_PS.encode("utf-16-le")).decode())
 
 # Default remote commands per OS. Windows apps are scheduled tasks created by setup-pc.ps1
 # (interactive, so they open on the logged-on desktop).
@@ -48,12 +94,14 @@ OS_ACTIONS = {
         "claude": 'schtasks /run /tn "WOL\\Claude"',
         "claude_status": f"{CLAUDE_PS} -Status",
         "claude_stop": f"{CLAUDE_PS} -Stop",
+        "kill": KILL_CMD,
     },
     "linux": {
         "lock": "loginctl lock-sessions",
         "restart": "systemctl reboot",
         "shutdown": "systemctl poweroff",
         "who": "who",
+        "kill": "loginctl lock-sessions; (sleep 1; systemctl disable --now ssh sshd) >/dev/null 2>&1 &",
     },
 }
 DEFAULT_APPS = {
@@ -324,14 +372,23 @@ def list_view(cfg):
     lines = [f"🖥 {m['name']}: {status_line(m)}" for m in cfg["machines"]] or ["No machines yet."]
     kb = [[btn(f"🖥 {m['name']}", f"o:{i}")] for i, m in enumerate(cfg["machines"])]
     kb.append([btn("➕ Add PC", "p")])
-    return "Machines\n\n" + "\n".join(lines), kb
+    if auth_cfg(cfg):
+        kb.append([btn("🛑 Kill switch", "x")])
+    text = "Machines\n\n" + "\n".join(lines)
+    if (auth_cfg(cfg) or {}).get("locked"):
+        text = "🛑 Kill switch is ON - every action is blocked.\n\n" + text
+    return text, kb
+
+
+def one_time_code():
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    code = "".join(secrets.choice(alphabet) for _ in range(8))
+    return f"{code[:4]}-{code[4:]}"
 
 
 def new_pair_code(relay_for=None):
     """One-time code: plain expiry time for a PC, {"exp", "relay"} for a relay of machine relay_for."""
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    code = "".join(secrets.choice(alphabet) for _ in range(8))
-    code = f"{code[:4]}-{code[4:]}"
+    code = one_time_code()
     exp = time.time() + PAIR_TTL
     with LOCK:
         codes = load_codes()
@@ -455,19 +512,32 @@ def wait_online(api, cfg, chat, mid, i):
     api.edit(chat, mid, t, kb)
 
 
-def handle_callback(api, cfg, cb):
+def handle_callback(api, cfg, cb, confirmed=False):
+    """A button press. confirmed=True when it comes back from the fingerprint page."""
     chat = cb["message"]["chat"]["id"]
     mid = cb["message"]["message_id"]
     data = cb.get("data", "")
-    try:
-        api.call("answerCallbackQuery", callback_query_id=cb["id"])
-    except Exception:  # noqa: BLE001
-        pass
+    if cb.get("id"):
+        try:
+            api.call("answerCallbackQuery", callback_query_id=cb["id"])
+        except Exception:  # noqa: BLE001
+            pass
     parts = data.split(":")
     op = parts[0]
+    if not confirmed and needs_auth(cfg, op):
+        return ask_auth(api, cfg, str(cb["from"]["id"]), chat, mid, data)
     if op == "m":
         t, kb = list_view(cfg)
         return api.edit(chat, mid, t, kb)
+    if op == "x":
+        kb = [[btn("🛑 Yes, cut everything off", "X"), btn("✖️ Cancel", "m")]]
+        return api.edit(chat, mid, "🛑 Kill switch\n\nEvery online PC locks its screen, stops SSH and the tunnel "
+                                   "and turns its network cards off. The bot blocks every action until you undo it "
+                                   "on the PC (wol-unkill.ps1) and run `wolbot unlock` on the server.", kb)
+    if op == "X":
+        api.edit(chat, mid, "🛑 Kill switch started...")
+        threading.Thread(target=kill, args=(api, f"pressed in the bot by {cb['from']['id']}"), daemon=True).start()
+        return None
     if op == "p":
         t, kb = pair_view(cfg)
         return api.edit(chat, mid, t, kb)
@@ -542,6 +612,7 @@ def serve():
     admins = {str(a).lstrip("b") for a in cfg.get("admins", [])}
     offset = 0
     pair_server(api)
+    auth_server(api)
     threading.Thread(target=ip_watch, daemon=True).start()
     print(f"wolbot started ({cfg.get('api', 'bale')}, {len(cfg['machines'])} machines)", flush=True)
     while True:
@@ -558,12 +629,14 @@ def serve():
                 if "callback_query" in u:
                     cb = u["callback_query"]
                     if str(cb["from"]["id"]) not in admins:
+                        stranger(api, cfg, cb["from"], f"pressed {cb.get('data', '')!r}")
                         continue
                     handle_callback(api, cfg, cb)
                 elif "message" in u:
                     msg = u["message"]
                     uid = str(msg["from"]["id"])
                     if uid not in admins:
+                        stranger(api, cfg, msg["from"], f"wrote {str(msg.get('text', ''))[:60]!r}")
                         api.send(msg["chat"]["id"], f"Not allowed. Your id: {uid}")
                         continue
                     t, kb = list_view(cfg)
@@ -767,6 +840,447 @@ def pair_server(api):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
+# ---------- fingerprint (passkeys / WebAuthn) + kill switch ----------
+
+def auth_cfg(cfg):
+    """Fingerprint settings, or None when the bot runs without them (old behaviour)."""
+    a = cfg.get("auth") or {}
+    return a if a.get("url") else None
+
+
+def b64u(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def b64d(s):
+    s = str(s)
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def rp(a):
+    """(rp id, origin) of the confirmation site."""
+    u = urllib.parse.urlsplit(a["url"])
+    return u.hostname, f"{u.scheme}://{u.netloc}"
+
+
+def needs_auth(cfg, op):
+    a = auth_cfg(cfg)
+    return bool(a) and op in a.get("protect", PROTECT)
+
+
+def user_keys(cfg, uid):
+    return [k for k in (auth_cfg(cfg) or {}).get("keys", []) if str(k["owner"]) == str(uid)]
+
+
+def action_label(cfg, data):
+    """Human name of a button press, e.g. "Shut down on PLUSPC" (also detects a changed machine list)."""
+    parts = data.split(":")
+    name = OP_NAMES.get(parts[0], parts[0])
+    if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) < len(cfg["machines"]):
+        m = cfg["machines"][int(parts[1])]
+        if parts[0] == "a" and len(parts) > 2 and parts[2].isdigit():
+            names = list(apps(m))
+            j = int(parts[2])
+            name += f" {names[j]}" if j < len(names) else " ?"
+        name += f" on {m['name']}"
+    return name
+
+
+def notify(api, cfg, text):
+    print(text.replace("\n", " | "), flush=True)
+    for a in cfg.get("admins", []):
+        try:
+            api.send(str(a).lstrip("b"), text)
+        except Exception as e:  # noqa: BLE001
+            print(f"notify {a}: {e}", flush=True)
+
+
+def stranger(api, cfg, user, what):
+    """Someone who is not an admin talks to the bot: tell the admins (once an hour per person)."""
+    uid = str(user.get("id"))
+    if time.time() - NOTIFIED.get(uid, 0) < 3600:
+        return
+    NOTIFIED[uid] = time.time()
+    who = " ".join(str(user.get(k, "")) for k in ("first_name", "last_name")).strip()
+    uname = f" @{user['username']}" if user.get("username") else ""
+    notify(api, cfg, f"👤 Stranger {uid} ({who}{uname}) {what} - ignored.")
+
+
+def ask_auth(api, cfg, uid, chat, mid, data):
+    """Hold a protected button press until the fingerprint page confirms it."""
+    a = auth_cfg(cfg)
+    parts = data.split(":")
+    back = f"s:{parts[1]}" if len(parts) > 1 else "m"
+    if a.get("locked"):
+        return api.edit(chat, mid, "🛑 Kill switch is ON - every action is blocked.\n"
+                                   "Undo on the PC: C:\\ProgramData\\wol-agent\\wol-unkill.ps1 (as admin), "
+                                   "then on the server: wolbot unlock", [[btn("⬅️ Machines", "m")]])
+    if not user_keys(cfg, uid):
+        return api.edit(chat, mid, "🔐 This button needs your fingerprint, but you have no passkey yet.\n"
+                                   f"On the server: wolbot passkey-add <phone name> {uid}",
+                        [[btn("⬅️ Back", back)]])
+    token = secrets.token_urlsafe(24)
+    label = action_label(cfg, data)
+    now = time.time()
+    with LOCK:
+        for t in [t for t, c in CONFIRMS.items() if c["exp"] < now]:
+            CONFIRMS.pop(t)
+        CONFIRMS[token] = {"uid": uid, "chat": chat, "mid": mid, "data": data, "label": label,
+                           "exp": now + AUTH_TTL, "challenge": b64u(secrets.token_bytes(32))}
+    kb = [[{"text": "🔐 Confirm with fingerprint", "url": f"{a['url'].rstrip('/')}/a/{token}"}],
+          [btn("✖️ Cancel", back)]]
+    return api.edit(chat, mid, f"🔐 {label}\n\nConfirm with your fingerprint within {AUTH_TTL // 60} min. "
+                               "The link works once.", kb)
+
+
+def run_confirmed(api, c):
+    cfg = load()
+    if (auth_cfg(cfg) or {}).get("locked"):
+        return api.edit(c["chat"], c["mid"], "🛑 Kill switch is ON - nothing was done.", [[btn("⬅️ Machines", "m")]])
+    if action_label(cfg, c["data"]) != c["label"]:
+        return api.edit(c["chat"], c["mid"], "The machine list changed meanwhile - nothing was done, press the button again.",
+                        [[btn("⬅️ Machines", "m")]])
+    print(f"confirmed by fingerprint: {c['label']} (user {c['uid']})", flush=True)
+    cb = {"id": None, "from": {"id": c["uid"]}, "data": c["data"],
+          "message": {"chat": {"id": c["chat"]}, "message_id": c["mid"]}}
+    return handle_callback(api, cfg, cb, confirmed=True)
+
+
+def auth_fail(api, why):
+    """A failed check. kill_after of them within 10 min start the kill switch."""
+    cfg = load()
+    limit = int((auth_cfg(cfg) or {}).get("kill_after", 3))
+    now = time.time()
+    with LOCK:
+        AUTH_FAILS[:] = [t for t in AUTH_FAILS if t > now - 600] + [now]
+        n = len(AUTH_FAILS)
+    notify(api, cfg, f"⚠️ Failed check: {why} ({n}/{limit} in 10 min)")
+    if limit and n >= limit:
+        threading.Thread(target=kill, args=(api, f"{n} failed checks in 10 min, last: {why}"), daemon=True).start()
+
+
+def kill(api, reason):
+    """Kill switch: block the bot and cut every online PC off (screen lock, SSH, tunnel, network)."""
+    with LOCK:
+        cfg = load()
+        a = cfg.setdefault("auth", {})
+        a["locked"] = True
+        save(cfg)
+        CONFIRMS.clear()
+    report = []
+    for m in cfg["machines"]:
+        if m.get("pc") and online(m) and "kill" in actions(m):
+            rc, out = pc_run(m, actions(m)["kill"], timeout=40)
+            # the PC cuts this very session, so a dropped connection (255) means it worked
+            report.append(f"{m['name']}: " + ("cut off" if rc in (0, 255) else f"failed ({out[-120:]})"))
+    notify(api, cfg, "🛑 KILL SWITCH\n" + reason + "\n\n" + "\n".join(report or ["no PC was online"])
+           + "\n\nEvery action is blocked. Undo: on the PC run C:\\ProgramData\\wol-agent\\wol-unkill.ps1 "
+             "as administrator, then on the server: wolbot unlock")
+
+
+def check_client_data(raw, kind, challenge, origin):
+    cd = json.loads(raw)
+    if cd.get("type") != kind:
+        raise ValueError("wrong type")
+    if not secrets.compare_digest(str(cd.get("challenge", "")), challenge):
+        raise ValueError("wrong challenge")
+    if cd.get("origin") != origin:
+        raise ValueError(f"wrong origin {cd.get('origin')}")
+
+
+def check_auth_data(ad, rp_id):
+    """-> (flags, sign count) after checking the site hash and that the user proved it is them."""
+    if len(ad) < 37 or ad[:32] != hashlib.sha256(rp_id.encode()).digest():
+        raise ValueError("wrong site")
+    flags = ad[32]
+    if not flags & 0x01 or not flags & 0x04:
+        raise ValueError("no user verification")
+    return flags, int.from_bytes(ad[33:37], "big")
+
+
+def verify_assertion(a, key, challenge, body):
+    """Check a fingerprint signature (WebAuthn assertion); returns the new sign count."""
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, padding
+
+    rp_id, origin = rp(a)
+    cd_raw = b64d(body["clientDataJSON"])
+    check_client_data(cd_raw, "webauthn.get", challenge, origin)
+    ad = b64d(body["authenticatorData"])
+    _, count = check_auth_data(ad, rp_id)
+    if count and count <= int(key.get("count", 0)):
+        raise ValueError("sign counter went back (cloned key?)")
+    msg = ad + hashlib.sha256(cd_raw).digest()
+    sig = b64d(body["signature"])
+    pub = serialization.load_der_public_key(b64d(key["pub"]))
+    alg = int(key["alg"])
+    if alg == -7:
+        pub.verify(sig, msg, ec.ECDSA(hashes.SHA256()))
+    elif alg == -257:
+        pub.verify(sig, msg, padding.PKCS1v15(), hashes.SHA256())
+    elif alg == -8:
+        pub.verify(sig, msg)
+    else:
+        raise ValueError(f"unsupported algorithm {alg}")
+    return count
+
+
+def verify_registration(a, challenge, body):
+    """Check a new passkey (WebAuthn create) and return what to store."""
+    from cryptography.hazmat.primitives import serialization
+
+    rp_id, origin = rp(a)
+    check_client_data(b64d(body["clientDataJSON"]), "webauthn.create", challenge, origin)
+    flags, count = check_auth_data(b64d(body["authenticatorData"]), rp_id)
+    pub = b64d(body["publicKey"])
+    serialization.load_der_public_key(pub)
+    alg = int(body["alg"])
+    if alg not in (-7, -8, -257):
+        raise ValueError(f"unsupported algorithm {alg}")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,1400}", str(body.get("id", ""))):
+        raise ValueError("bad credential id")
+    return {"id": body["id"], "pub": b64u(pub), "alg": alg, "count": count,
+            "synced": bool(flags & 0x10), "added": time.strftime("%Y-%m-%d %H:%M")}
+
+
+def load_enroll():
+    try:
+        with open(ENROLL) as f:
+            codes = json.load(f)
+    except (OSError, ValueError):
+        codes = {}
+    return {c: e for c, e in codes.items() if e["exp"] > time.time()}
+
+
+def save_enroll(codes):
+    with open(ENROLL, "w") as f:
+        json.dump(codes, f)
+    os.chmod(ENROLL, 0o600)
+
+
+AUTH_HTML = r"""<!doctype html>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>wolbot</title>
+<style>
+:root{--bg:#0f1117;--card:#181b24;--fg:#e8eaf0;--mut:#9aa1b2;--acc:#6c8cff;--ok:#3ecf8e;--err:#ff6b6b;--line:#2a2f3c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;min-height:100vh}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px 32px;border-bottom:1px solid var(--line)}
+header b{font-size:18px}
+.lang button{background:none;border:1px solid var(--line);color:var(--mut);border-radius:8px;padding:4px 10px;cursor:pointer}
+.lang button.on{color:var(--fg);border-color:var(--acc)}
+main{width:100%;padding:24px 32px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px;text-align:center}
+.icon{font-size:64px;line-height:1}
+h1{font-size:22px;margin:12px 0 4px}
+.what{font-size:18px;color:var(--acc);margin:8px 0 20px;direction:ltr;unicode-bidi:plaintext}
+#go{background:var(--acc);color:#fff;border:0;border-radius:12px;padding:16px 28px;font-size:18px;width:100%;max-width:520px;cursor:pointer}
+#go:disabled{opacity:.5}
+#msg{margin-top:18px;min-height:1.7em;color:var(--mut)}
+#msg.ok{color:var(--ok)} #msg.err{color:var(--err)}
+.note{color:var(--mut);font-size:14px;margin-top:20px}
+@media(max-width:600px){header,main{padding-left:16px;padding-right:16px}}
+</style></head><body>
+<header><b>🔐 wolbot</b><span class="lang"><button data-l="fa">فارسی</button> <button data-l="en">English</button></span></header>
+<main><div class="box">
+<div class="icon" id="icon">👆</div>
+<h1 id="title"></h1>
+<div class="what" id="what"></div>
+<button id="go"></button>
+<div id="msg"></div>
+<div class="note" id="note"></div>
+</div></main>
+<script>
+const D = __DATA__;
+const T = {
+ fa: {get: "تأیید با اثر انگشت", create: "ثبت این گوشی", gone: "این لینک منقضی شده یا قبلاً استفاده شده",
+      btnget: "تأیید", btncreate: "ثبت اثر انگشت", wait: "منتظر اثر انگشت...", send: "در حال بررسی...",
+      okget: "✅ تأیید شد. نتیجه را در بله ببینید.", okcreate: "✅ این گوشی ثبت شد. حالا دکمه‌های ربات اثر انگشت می‌خواهند.",
+      bad: "❌ رد شد:", cancel: "لغو شد یا خطا داد:", old: "مرورگر شما Passkey را پشتیبانی نمی‌کند. با Chrome باز کنید.",
+      noteget: "لینک فقط یک بار و تا ۲ دقیقه کار می‌کند. اگر رد شد، دوباره دکمه را در بله بزنید.",
+      notecreate: "لینک فقط یک بار کار می‌کند. قفل گوشی باید PIN قوی باشد.", gonenote: "دکمه را دوباره در بله بزنید."},
+ en: {get: "Confirm with your fingerprint", create: "Register this phone", gone: "This link expired or was already used",
+      btnget: "Confirm", btncreate: "Register fingerprint", wait: "Waiting for your fingerprint...", send: "Checking...",
+      okget: "✅ Confirmed. See the result in the bot.", okcreate: "✅ This phone is registered. Bot buttons now need your fingerprint.",
+      bad: "❌ Refused:", cancel: "Cancelled or failed:", old: "This browser has no passkey support. Open the link in Chrome.",
+      noteget: "The link works once, for 2 minutes. If it is refused, press the button in the bot again.",
+      notecreate: "The link works once. Your phone lock should be a strong PIN.", gonenote: "Press the button in the bot again."}
+};
+let L = localStorage.getItem("lang") || "fa", state = null;
+const $ = id => document.getElementById(id);
+function paint() {
+  const t = T[L];
+  document.documentElement.lang = L; document.documentElement.dir = L === "fa" ? "rtl" : "ltr";
+  document.querySelectorAll(".lang button").forEach(b => b.classList.toggle("on", b.dataset.l === L));
+  $("title").textContent = t[D.mode]; $("what").textContent = D.what || "";
+  $("go").textContent = t["btn" + D.mode] || ""; $("go").style.display = D.mode === "gone" ? "none" : "";
+  $("note").textContent = D.mode === "gone" ? t.gonenote : t["note" + D.mode];
+  if (D.mode === "gone") $("icon").textContent = "⌛";
+  if (state) { $("msg").textContent = state[0] === "raw" ? state[1] : t[state[0]] + (state[1] ? " " + state[1] : ""); $("msg").className = state[2] || ""; }
+}
+function show(key, extra, cls) { state = [key, extra || "", cls]; paint(); }
+document.querySelectorAll(".lang button").forEach(b => b.onclick = () => { L = b.dataset.l; try { localStorage.setItem("lang", L) } catch (e) {} paint(); });
+const enc = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const dec = s => { s = s.replace(/-/g, "+").replace(/_/g, "/"); return Uint8Array.from(atob(s + "=".repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0)); };
+async function go() {
+  if (!window.PublicKeyCredential) return show("old", "", "err");
+  $("go").disabled = true; show("wait");
+  let body;
+  try {
+    if (D.mode === "get") {
+      const c = await navigator.credentials.get({publicKey: {challenge: dec(D.challenge), rpId: D.rpId, timeout: 60000,
+        userVerification: "required", allowCredentials: D.allow.map(id => ({type: "public-key", id: dec(id)}))}});
+      body = {id: c.id, clientDataJSON: enc(c.response.clientDataJSON), authenticatorData: enc(c.response.authenticatorData), signature: enc(c.response.signature)};
+    } else {
+      const c = await navigator.credentials.create({publicKey: {challenge: dec(D.challenge), rp: {id: D.rpId, name: "wolbot"},
+        user: {id: dec(D.uid), name: D.name, displayName: D.name}, timeout: 120000, attestation: "none",
+        pubKeyCredParams: [-7, -8, -257].map(alg => ({type: "public-key", alg})),
+        authenticatorSelection: {userVerification: "required", residentKey: "preferred"}}});
+      const r = c.response;
+      if (!r.getPublicKey || !r.getAuthenticatorData) { $("go").disabled = false; return show("old", "", "err"); }
+      body = {id: c.id, clientDataJSON: enc(r.clientDataJSON), authenticatorData: enc(r.getAuthenticatorData()), publicKey: enc(r.getPublicKey()), alg: r.getPublicKeyAlgorithm()};
+    }
+  } catch (e) { $("go").disabled = false; return show("cancel", e.name || e.message, "err"); }
+  show("send");
+  try {
+    const res = await fetch(location.pathname, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const j = await res.json().catch(() => ({}));
+    if (res.ok) { $("icon").textContent = "✅"; $("go").style.display = "none"; show("ok" + D.mode, "", "ok"); }
+    else { $("icon").textContent = "⛔"; $("go").style.display = "none"; show("bad", j.error || res.status, "err"); }
+  } catch (e) { show("cancel", e.message, "err"); }
+}
+$("go").onclick = go;
+paint();
+</script></body></html>
+"""
+
+
+def auth_server(api):
+    """Confirmation pages behind the reverse proxy (Caddy): /a/<token> = confirm, /e/<code> = add a passkey."""
+    a = auth_cfg(load())
+    if not a:
+        return
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def head(self, code, ctype, n):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(n))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+
+        def reply(self, code, obj):
+            body = json.dumps(obj).encode()
+            self.head(code, "application/json", len(body))
+            self.wfile.write(body)
+
+        def page(self, data, code=200):
+            body = AUTH_HTML.replace("__DATA__", json.dumps(data).replace("</", "<\\/")).encode()
+            self.head(code, "text/html; charset=utf-8", len(body))
+            self.wfile.write(body)
+
+        def ip(self):
+            return self.headers.get("X-Real-IP") or self.client_address[0]
+
+        def do_GET(self):  # noqa: N802 - http.server API
+            cfg = load()
+            a = auth_cfg(cfg)
+            path = urllib.parse.urlsplit(self.path).path
+            gone = {"mode": "gone"}
+            m = re.fullmatch(r"/a/([\w-]{20,64})", path)
+            if a and m:
+                c = CONFIRMS.get(m.group(1))
+                if not c or c["exp"] < time.time() or a.get("locked"):
+                    return self.page(gone, 410)
+                return self.page({"mode": "get", "challenge": c["challenge"], "rpId": rp(a)[0], "what": c["label"],
+                                  "allow": [k["id"] for k in user_keys(cfg, c["uid"])]})
+            m = re.fullmatch(r"/e/([A-Z0-9]{4}-[A-Z0-9]{4})", path)
+            if a and m:
+                e = load_enroll().get(m.group(1))
+                if not e:
+                    return self.page(gone, 410)
+                ch = ENROLL_CH.setdefault(m.group(1), b64u(secrets.token_bytes(32)))
+                return self.page({"mode": "create", "challenge": ch, "rpId": rp(a)[0], "what": e["name"],
+                                  "uid": b64u(str(e["owner"]).encode()), "name": f"wolbot {e['name']}"})
+            return self.reply(404, {"error": "not found"})
+
+        def do_POST(self):  # noqa: N802 - http.server API
+            path = urllib.parse.urlsplit(self.path).path
+            try:
+                n = min(int(self.headers.get("Content-Length", 0)), 16384)
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                return self.reply(400, {"error": "bad request"})
+            m = re.fullmatch(r"/a/([\w-]{20,64})", path)
+            if m:
+                return self.confirm(m.group(1), body)
+            m = re.fullmatch(r"/e/([A-Z0-9]{4}-[A-Z0-9]{4})", path)
+            if m:
+                return self.enroll(m.group(1), body)
+            return self.reply(404, {"error": "not found"})
+
+        def confirm(self, token, body):
+            with LOCK:
+                c = CONFIRMS.pop(token, None)  # one try per link
+            if not c or c["exp"] < time.time():
+                return self.reply(410, {"error": "expired"})
+            try:
+                with LOCK:
+                    cfg = load()
+                    a = auth_cfg(cfg)
+                    if not a or a.get("locked"):
+                        raise ValueError("kill switch is on")
+                    key = next((k for k in user_keys(cfg, c["uid"]) if k["id"] == body.get("id")), None)
+                    if key is None:
+                        raise ValueError("unknown passkey")
+                    key["count"] = verify_assertion(a, key, c["challenge"], body)
+                    key["used"] = time.strftime("%Y-%m-%d %H:%M")
+                    save(cfg)
+            except Exception as e:  # noqa: BLE001 - any failure is a refused check
+                self.reply(403, {"error": str(e)[:120] or "bad signature"})
+                api.edit(c["chat"], c["mid"], f"⛔ Fingerprint check failed: {c['label']}\nNothing was done.",
+                         [[btn("⬅️ Machines", "m")]])
+                return auth_fail(api, f"{c['label']}: {str(e)[:80] or 'bad signature'} (from {self.ip()})")
+            self.reply(200, {"ok": True})
+            threading.Thread(target=run_confirmed, args=(api, c), daemon=True).start()
+            return None
+
+        def enroll(self, code, body):
+            with LOCK:
+                codes = load_enroll()
+                e = codes.pop(code, None)
+                ch = ENROLL_CH.pop(code, None)
+                if e:
+                    save_enroll(codes)
+            if not e or not ch:
+                auth_fail(api, f"passkey sign-up with a wrong or used code (from {self.ip()})")
+                return self.reply(410, {"error": "expired"})
+            try:
+                with LOCK:
+                    cfg = load()
+                    key = verify_registration(auth_cfg(cfg), ch, body)
+                    key.update(owner=str(e["owner"]), name=e["name"])
+                    keys = cfg["auth"].setdefault("keys", [])
+                    keys[:] = [k for k in keys if k["id"] != key["id"]] + [key]
+                    save(cfg)
+            except Exception as ex:  # noqa: BLE001
+                return self.reply(400, {"error": str(ex)[:120]})
+            self.reply(200, {"ok": True})
+            notify(api, cfg, f"🔑 Passkey '{e['name']}' added for {e['owner']} (from {self.ip()})"
+                   + (" - synced to the phone's account (Google/Apple)" if key["synced"] else ""))
+            return None
+
+        def log_message(self, fmt, *args):
+            print(f"auth {self.ip()}: {fmt % args}"[:200], flush=True)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", int(a.get("port", 8791))), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+
 # ---------- CLI ----------
 
 HELP = """wolbot - Wake-on-LAN bot
@@ -784,7 +1298,70 @@ HELP = """wolbot - Wake-on-LAN bot
   wolbot pair-code                             one-time code for WOL Agent.exe (same as Add PC in the bot)
   wolbot relay-code <name>                     one-time code for relay.py (modem without public IP)
   wolbot pubkey                                key to put on the PC (setup-pc.ps1 -BotKey)
+
+Fingerprint confirmation (passkeys) + kill switch:
+  wolbot auth <https://auth.example.com> [port]
+                                               turn it on; the reverse proxy sends that site to
+                                               127.0.0.1:<port> (default 8791). `wolbot auth off` = off
+  wolbot passkey-add <name> [user id]          one-time link to register a phone (default: first admin)
+  wolbot passkey-list | passkey-del <name>
+  wolbot kill                                  kill switch now (same as the bot button)
+  wolbot unlock                                allow actions again after a kill switch
 """
+
+
+def auth_cli(cmd, args):
+    cfg = load()
+    a = cfg.setdefault("auth", {})
+    if cmd == "auth":
+        if not args:
+            raise SystemExit("wolbot auth <https://auth.example.com> [port]   or   wolbot auth off")
+        if args[0] == "off":
+            a["url"] = ""
+        else:
+            if not re.fullmatch(r"https://[\w.-]+(:\d+)?/?", args[0]):
+                raise SystemExit("needs an https:// address with no path, e.g. https://auth.example.com")
+            try:
+                import cryptography  # noqa: F401 - only checks it is there
+            except ImportError:
+                raise SystemExit("needs the Python cryptography module: apt install python3-cryptography")
+            a["url"] = args[0].rstrip("/")
+            a["port"] = int(args[1]) if len(args) > 1 else a.get("port", 8791)
+            a.setdefault("protect", PROTECT)
+            a.setdefault("kill_after", 3)
+            a.setdefault("keys", [])
+        save(cfg)
+        return print("Saved. Restart the bot: systemctl restart wol-bot")
+    if cmd == "unlock":
+        a["locked"] = False
+        save(cfg)
+        return print("Unlocked: bot actions work again (no restart needed).")
+    if cmd == "kill":
+        return kill(Api(cfg), "started on the server (wolbot kill)")
+    if cmd == "passkey-list":
+        for k in a.get("keys", []):
+            print(f"{k['name']}  owner={k['owner']}  added={k['added']}  last used={k.get('used', '-')}"
+                  + ("  (synced)" if k.get("synced") else ""))
+        return print("Kill switch: ON" if a.get("locked") else f"{len(a.get('keys', []))} passkey(s)")
+    if cmd == "passkey-del":
+        before = len(a.get("keys", []))
+        a["keys"] = [k for k in a.get("keys", []) if k["name"] != args[0]]
+        save(cfg)
+        return print(f"Removed {before - len(a['keys'])} passkey(s).")
+    # passkey-add
+    if not auth_cfg(cfg):
+        raise SystemExit("Turn it on first: wolbot auth https://auth.example.com")
+    if not args:
+        raise SystemExit("wolbot passkey-add <name> [user id]")
+    owner = args[1] if len(args) > 1 else str((cfg.get("admins") or [""])[0]).lstrip("b")
+    if owner not in {str(x).lstrip("b") for x in cfg.get("admins", [])}:
+        raise SystemExit(f"{owner} is not an admin (wolbot admin <id>)")
+    code = one_time_code()
+    codes = load_enroll()
+    codes[code] = {"exp": time.time() + PAIR_TTL, "owner": owner, "name": re.sub(r"[^\w .-]", "", args[0])[:30]}
+    save_enroll(codes)
+    return print(f"Open on the phone (Chrome / Safari), within {PAIR_TTL // 60} min, once:\n"
+                 f"{a['url'].rstrip('/')}/e/{code}")
 
 
 def main(argv):
@@ -802,6 +1379,8 @@ def main(argv):
         m = find(cfg, argv[1])
         return print(f"python relay.py {cfg.get('public_host', '<server>')}:{cfg.get('pair_port', 8790)}/"
                      f"{new_pair_code(m['name'])}  (one use, {PAIR_TTL // 60} min)")
+    if cmd in ("auth", "passkey-add", "passkey-list", "passkey-del", "kill", "unlock"):
+        return auth_cli(cmd, argv[1:])
     if cmd == "help" or cmd not in ("set-token", "admin", "add-pc", "add-wake", "del", "list", "wake", "status"):
         return print(HELP)
     cfg = load()

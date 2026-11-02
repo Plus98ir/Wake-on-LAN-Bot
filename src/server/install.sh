@@ -34,6 +34,9 @@ while [ $# -gt 0 ]; do
 done
 
 command -v python3 >/dev/null || { echo "python3 is required"; exit 1; }
+# fingerprint confirmation (wolbot auth) checks passkey signatures with it
+python3 -c "import cryptography" 2>/dev/null || apt-get install -y -q python3-cryptography >/dev/null 2>&1 \
+  || echo "  python3-cryptography missing - only needed for fingerprint confirmation (wolbot auth)"
 
 echo "[1/5] Files"
 install -d -m 755 "$DIR"

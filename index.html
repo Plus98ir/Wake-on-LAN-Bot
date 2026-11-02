@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wake-on-LAN Bot</title>
-<meta name="description" content="Turn your PC on from your phone with a Bale or Telegram bot, then start its apps.">
+<meta name="description" content="Turn your PC on from your phone with a Bale or Telegram bot, then start its apps. Every button confirmed with your fingerprint.">
+<meta property="og:image" content="https://raw.githubusercontent.com/Plus98ir/Wake-on-LAN-Bot/main/Wake-on-LAN-Bot.png">
 <link rel="icon" href="src/pc/app/icon.png">
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--text:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--acc2:#7c3aed;--ok:#3fb950;
@@ -27,6 +28,7 @@ main{width:100%;padding:24px 32px}
 .phone .msg{background:#0b0f14;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;direction:ltr;text-align:left;font-size:14px}
 .phone .kb{display:grid;grid-template-columns:1fr 1fr;gap:8px;direction:ltr}
 .phone .kb div{background:#21262d;border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center;font-size:14px}
+.phone .kb .wide{grid-column:1/-1}.phone .kb .acc{background:linear-gradient(90deg,var(--acc),var(--acc2));border:0;color:#fff}
 h2{font-size:24px;margin:40px 0 16px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
@@ -70,7 +72,10 @@ footer a,main a{color:var(--acc)}
         <div>🤖 Claude Remote</div><div>📡 Relay</div>
         <div>🔒 Lock</div><div>👤 Who</div>
         <div>🔁 Restart</div><div>⏻ Shut down</div>
+        <div class="wide">🛑 Kill switch</div>
       </div>
+      <div class="msg" style="margin:10px 0 0">🔐 Shut down on PC<br>Confirm with your fingerprint within 2 min.</div>
+      <div class="kb"><div class="wide acc">🔐 Confirm with fingerprint</div></div>
     </div>
   </section>
 
@@ -81,6 +86,17 @@ footer a,main a{color:var(--acc)}
     <div class="card"><div class="ic">💻</div><h3 data-t="f3"></h3><p data-t="f3d"></p></div>
     <div class="card"><div class="ic">🛡</div><h3 data-t="f4"></h3><p data-t="f4d"></p></div>
   </div>
+
+  <h2 data-t="secT"></h2>
+  <div class="grid">
+    <div class="card"><div class="ic">👆</div><h3 data-t="g1"></h3><p data-t="g1d"></p></div>
+    <div class="card"><div class="ic">🛑</div><h3 data-t="g2"></h3><p data-t="g2d"></p></div>
+    <div class="card"><div class="ic">👤</div><h3 data-t="g3"></h3><p data-t="g3d"></p></div>
+    <div class="card"><div class="ic">🔒</div><h3 data-t="g4"></h3><p data-t="g4d"></p></div>
+  </div>
+  <pre style="margin-top:16px">wolbot auth https://auth.example.com      # reverse proxy -> 127.0.0.1:8791
+wolbot passkey-add Phone                  # open the link on your phone, touch the sensor
+systemctl restart wol-bot</pre>
 
   <h2 data-t="howT"></h2>
   <pre class="diagram">Phone (bot)  ──►  Your server (wolbot)  ──►  router / modem  ──magic packet──►  PC
@@ -109,26 +125,37 @@ fa:{h1:"کامپیوترت را از <span>توی گوشی</span> روشن کن"
  f1:"روشن کردن از راه دور",f1d:"یک دکمه در بات، کامپیوتر خاموش روشن می‌شود و بات خبر می‌دهد کی بالا آمد.",
  f2:"اجرای برنامه‌ها",f2d:"هر برنامه‌ای که بخواهی (تا ۱۲ تا) دکمه‌ی خودش را در بات دارد؛ Claude Remote پشت صحنه یا در VS Code؛ قفل، ری‌استارت و خاموش کردن هم هست.",
  f3:"Claude از توی گوشی",f3d:"یک دکمه Claude Code را روی کامپیوتر روشن می‌کند و از اپ Claude ادامه می‌دهی.",
- f4:"امن",f4d:"کامپیوتر خودش به سرور وصل می‌شود؛ کد اتصال یک‌بار مصرف است و فقط ادمین به بات دسترسی دارد.",
+ f4:"امن",f4d:"کامپیوتر خودش به سرور وصل می‌شود؛ کد اتصال یک‌بار مصرف است، فقط ادمین به بات دسترسی دارد و هر دکمه اثر انگشت می‌خواهد.",
  howT:"چطور کار می‌کند؟",stepsT:"راه‌اندازی در ۴ قدم",
  s1:"سرور",s1d:"اسکریپت نصب را روی یک سرور لینوکسی اجرا کن و توکن بات را بده.",
  s2:"BIOS",s2d:"ErP = Disabled و Power On By PCI-E = Enabled. کامپیوتر با کابل به مودم وصل باشد.",
  s3:"اتصال کامپیوتر",s3d:"در بات بزن ➕ Add PC، برنامه‌ی WOL Agent را اجرا کن و کد را بچسبان.",
  s4:"مودم",s4d:"TD-LTE / ۴G؟ یک گوشی قدیمی در خانه را رله کن (📡 Relay)، مودم تنظیم نمی‌خواهد. وگرنه پورت UDP 9 را به آی‌پی کامپیوتر فوروارد کن.",
+ secT:"تأیید با اثر انگشت و کیل‌سوییچ",
+ g1:"هر دکمه با اثر انگشت",g1d:"روشن، خاموش، قفل، برنامه‌ها و Claude اول یک لینک تأیید می‌دهند؛ گوشی اثر انگشتت را می‌خواهد (Passkey / WebAuthn) و فقط بعد از آن دستور اجرا می‌شود. لینک یک‌بار مصرف است و ۲ دقیقه اعتبار دارد.",
+ g2:"کیل‌سوییچ",g2d:"۳ تأیید ناموفق در ۱۰ دقیقه، یا زدن دکمه‌ی 🛑: بات همه‌چیز را می‌بندد و کامپیوتر قفل می‌شود، SSH و تونل خاموش و کارت شبکه قطع می‌شود. برگشت فقط پشت خود کامپیوتر.",
+ g3:"گزارش غریبه‌ها",g3d:"هر کسی جز ادمین به بات پیام بدهد یا دکمه بزند، به تو خبر داده می‌شود.",
+ g4:"هر نفر کلید خودش",g4d:"برای هر ادمین یک Passkey جدا ثبت می‌شود و هر وقت بخواهی باطلش می‌کنی. کسی که فقط حساب بله‌ات را دارد، بدون گوشی و اثر انگشتت کاری نمی‌تواند بکند.",
  srvT:"نصب سرور",foot:"Wake-on-LAN Bot — متن‌باز روی <a href='https://github.com/Plus98ir/Wake-on-LAN-Bot'>GitHub</a>"},
 en:{h1:"Turn your PC on <span>from your phone</span>",sub:"With a Bale or Telegram bot: wake it, start your apps, lock it or shut it down. Works behind any modem.",
  dl:"Download WOL Agent",docs:"Full guide",whatT:"What it does",
  f1:"Remote wake",f1d:"One button in the bot wakes the PC, and the bot tells you when it is up.",
  f2:"Start apps",f2d:"Any app you pick (up to 12) gets its own button; Claude Remote in the background or in VS Code; lock, restart and shut down too.",
  f3:"Claude from your phone",f3d:"One button starts Claude Code on the PC; continue in the Claude app.",
- f4:"Safe",f4d:"The PC connects out to your server; pair codes are one-time and only admins can use the bot.",
+ f4:"Safe",f4d:"The PC connects out to your server; pair codes are one-time, only admins can use the bot and every button needs a fingerprint.",
  howT:"How it works",stepsT:"Set up in 4 steps",
  s1:"Server",s1d:"Run the install script on a Linux server and give it the bot token.",
  s2:"BIOS",s2d:"ErP = Disabled, Power On By PCI-E = Enabled. The PC must be on a cable.",
  s3:"Link the PC",s3d:"Press ➕ Add PC in the bot, run WOL Agent and paste the code.",
  s4:"Modem",s4d:"TD-LTE / 4G? Make an old phone at home the relay (📡 Relay), no modem setup. Otherwise forward UDP port 9 to the PC's IP.",
+ secT:"Fingerprint confirmation and kill switch",
+ g1:"Every button needs your fingerprint",g1d:"Wake, shut down, lock, apps and Claude first send a confirm link; your phone asks for your fingerprint (passkey / WebAuthn) and only then the command runs. One-time link, valid 2 minutes.",
+ g2:"Kill switch",g2d:"3 failed checks in 10 minutes, or the 🛑 button: the bot blocks everything and the PC locks, stops SSH and the tunnel and turns its network off. Undo only at the PC.",
+ g3:"Strangers reported",g3d:"Anyone who is not an admin writing to the bot or pressing a button is reported to you.",
+ g4:"One key per person",g4d:"Each admin registers their own passkey and you can revoke it any time. Someone with only your Bale account cannot do anything without your phone and finger.",
  srvT:"Server install",foot:"Wake-on-LAN Bot — open source on <a href='https://github.com/Plus98ir/Wake-on-LAN-Bot'>GitHub</a>"}};
 let lang="fa";try{lang=localStorage.getItem("lang")||(navigator.language.startsWith("fa")?"fa":"en")}catch(e){}
+const q=new URLSearchParams(location.search).get("lang");if(q=="fa"||q=="en")lang=q;else if(/index-en\.html$/.test(location.pathname))lang="en";
 function tr(){const t=L[lang];document.documentElement.lang=lang;document.documentElement.dir=lang=="fa"?"rtl":"ltr";
  document.querySelectorAll("[data-t]").forEach(e=>e.innerHTML=t[e.dataset.t]);document.getElementById("lang").textContent=lang=="fa"?"English":"فارسی";}
 document.getElementById("lang").onclick=()=>{lang=lang=="fa"?"en":"fa";try{localStorage.setItem("lang",lang)}catch(e){};tr();};

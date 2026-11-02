@@ -1,9 +1,9 @@
-<p align="center"><img src="src/pc/app/icon.png" width="96" alt="WOL Agent"></p>
+<p align="center"><img src="Wake-on-LAN-Bot.png" alt="Wake-on-LAN Bot"></p>
 
 <h1 align="center">Wake-on-LAN Bot</h1>
 
 <p align="center">Turn your PC on from your phone and start its apps — through a Bale or Telegram bot.<br>
-<a href="#فارسی">فارسی</a> · <a href="https://plus98ir.github.io/Wake-on-LAN-Bot/">Website</a> · <a href="../../releases/latest">Download</a></p>
+<a href="#فارسی">فارسی</a> · <a href="https://plus98ir.dpdns.org/Wake-on-LAN-Bot/">Website</a> · <a href="../../releases/latest">Download</a></p>
 
 ---
 
@@ -15,6 +15,7 @@
 - **Claude Remote**: start Claude Code Remote Control in the background or in a VS Code terminal you can see at the PC.
 - **VS Code from anywhere** with Remote-SSH, no open ports at home.
 - Works behind **any modem / NAT**: the PC connects out to your server, nothing is exposed at home.
+- **Fingerprint confirmation**: every button that does something asks for your fingerprint (passkey) first, plus a **kill switch**.
 
 ### How it fits together
 ```
@@ -63,8 +64,28 @@ wolbot list | wake <name> | status <name> | pair-code | del <name>
 wolbot add-wake <name> udp <host> [port]
 wolbot add-wake <name> ssh <host> <port> <user> [iface]
 wolbot relay-code <name>
+wolbot auth <https://auth.example.com> [port] | auth off
+wolbot passkey-add <name> [user id] | passkey-list | passkey-del <name>
+wolbot kill | unlock
 ```
 Config: `/etc/wol-bot/config.json`. Service: `systemctl status wol-bot`. Uninstall: `bash install.sh --uninstall`.
+
+### Fingerprint confirmation and kill switch (optional, recommended)
+With it on, every button that does something (wake, apps, lock, who, restart, shut down, Claude, add PC, relay, remove) first answers with **🔐 Confirm with fingerprint**. The link opens a page on your own domain, your phone asks for your fingerprint (a passkey, WebAuthn) and only then the command runs. Someone who gets into your Bale/Telegram account still cannot do anything without your phone and your finger.
+
+Needs a domain with HTTPS on the server (Caddy, nginx, ...) that forwards to `127.0.0.1:8791`:
+```bash
+wolbot auth https://auth.example.com      # turn it on (needs python3-cryptography, install.sh adds it)
+systemctl restart wol-bot
+wolbot passkey-add Phone                  # prints a one-time link: open it on your phone, touch the sensor
+```
+With Caddy: `auth.example.com { reverse_proxy 127.0.0.1:8791 }`.
+
+- A confirm link works **once** and for **2 minutes**, only for that one action on that one PC.
+- **Kill switch**: 3 failed checks in 10 minutes (wrong signature, reused link or sign-up code), or the **🛑 Kill switch** button (no fingerprint needed, cutting off is always safe): the bot blocks every action, and every online Windows PC locks its screen, stops the tunnel and SSH and turns its network cards off. Undo at the PC: `C:\ProgramData\wol-agent\wol-unkill.ps1` as administrator, then `wolbot unlock` on the server.
+- Anyone who is not an admin writing to the bot is reported to the admins.
+- More people: `wolbot admin <id>` then `wolbot passkey-add <name> <id>`; each person confirms with their own phone. `wolbot passkey-list`, `wolbot passkey-del <name>`.
+- Your phone may accept its screen-lock PIN instead of a finger (Android/iOS allow it), so use a long PIN, not a pattern. Passkeys in Google Password Manager / iCloud sync with that account: protect it with 2FA.
 
 ### Claude Code from your phone
 Bot button **🤖 Claude Remote** starts `claude remote-control` on the PC (in the folder chosen in the app; Claude Code CLI or the VS Code extension must be installed and signed in). Continue in the Claude app or at claude.ai/code. The first install opens Claude once so you can trust that folder. **⏹ Stop Claude** ends it.
@@ -82,7 +103,8 @@ No dependencies. Icon/manifest live in `rsrc_windows_amd64.syso` (`windres -O co
 ### Security notes
 - Tunnel user `woltun` has no shell and may only open its own port on `127.0.0.1`.
 - Pair codes are one-time, live 15 minutes; 5 wrong codes block an IP for 10 minutes. Only public keys cross the pairing port.
-- The bot answers only the admin ids in the config.
+- The bot answers only the admin ids in the config; with `wolbot auth` every action also needs the admin's fingerprint.
+- On the PC, keep `sshd` on loopback only (`ListenAddress 127.0.0.1`, `PasswordAuthentication no` in `C:\ProgramData\ssh\sshd_config`): the tunnel still reaches it, nothing on your home network can.
 
 ---
 
@@ -96,6 +118,7 @@ No dependencies. Icon/manifest live in `rsrc_windows_amd64.syso` (`windres -O co
 - **Claude Remote**: روشن کردن Claude Code Remote Control پشت صحنه یا داخل ترمینال VS Code (پشت کامپیوتر هم دیده می‌شود).
 - **VS Code از هر جا** با Remote-SSH، بدون باز کردن پورت در خانه.
 - پشت **هر مودمی** کار می‌کند: کامپیوتر خودش به سرور وصل می‌شود.
+- **تأیید با اثر انگشت**: هر دکمه‌ای که کاری انجام می‌دهد اول اثر انگشتت را می‌خواهد، به‌علاوه‌ی **کیل‌سوییچ**.
 
 ### سه تکه دارد
 | تکه | کجا | کارش |
@@ -127,10 +150,27 @@ sudo bash install.sh --token <توکن-بات> --public-host <آی‌پی-سرو
 
 > بعضی مودم‌ها چند دقیقه بعد از خاموش شدن کامپیوتر آدرسش را فراموش می‌کنند. اگر بعد از مدت طولانی روشن نشد، از رله استفاده کن.
 
+### تأیید با اثر انگشت و کیل‌سوییچ (اختیاری، پیشنهادی)
+وقتی روشن باشد، هر دکمه‌ای که کاری انجام می‌دهد (روشن، برنامه‌ها، قفل، Who، ری‌استارت، خاموش، Claude، Add PC، Relay، حذف) اول دکمه‌ی **🔐 Confirm with fingerprint** می‌دهد. لینک یک صفحه روی دامنه‌ی خودت باز می‌کند، گوشی اثر انگشتت را می‌خواهد (Passkey) و فقط بعد از آن دستور اجرا می‌شود. کسی که حساب بله‌ات را داشته باشد، بدون گوشی و انگشت تو کاری نمی‌تواند بکند.
+
+یک دامنه با HTTPS روی سرور لازم است که به `127.0.0.1:8791` برسد:
+```bash
+wolbot auth https://auth.example.com
+systemctl restart wol-bot
+wolbot passkey-add Phone      # لینک یک‌بار مصرف را در گوشی باز کن و انگشت بگذار
+```
+در Caddy: `auth.example.com { reverse_proxy 127.0.0.1:8791 }`
+
+- لینک تأیید **یک بار** و تا **۲ دقیقه** کار می‌کند و فقط برای همان دستور روی همان کامپیوتر است.
+- **کیل‌سوییچ**: ۳ تأیید ناموفق در ۱۰ دقیقه یا زدن دکمه‌ی **🛑 Kill switch** (اثر انگشت نمی‌خواهد): بات همه‌چیز را می‌بندد و کامپیوترها قفل می‌شوند، تونل و SSH خاموش و کارت شبکه قطع می‌شود. برگشت: پشت کامپیوتر `C:\ProgramData\wol-agent\wol-unkill.ps1` را با دسترسی ادمین اجرا کن، بعد روی سرور `wolbot unlock`.
+- هر غریبه‌ای که به بات پیام بدهد به ادمین‌ها گزارش می‌شود.
+- نفر دیگر: `wolbot admin <id>` و بعد `wolbot passkey-add <اسم> <id>`؛ هر کس با گوشی خودش تأیید می‌کند. باطل کردن: `wolbot passkey-del <اسم>`.
+- گوشی ممکن است به‌جای اثر انگشت PIN قفل صفحه را هم قبول کند؛ پس PIN بلند بگذار، نه الگو. Passkey با حساب گوگل/iCloud همگام می‌شود؛ روی آن حساب 2FA بگذار.
+
 ### Claude از توی گوشی
 دکمه‌ی **🤖 Claude Remote** در بات، Claude Code را روی کامپیوتر روشن می‌کند. بعد از اپ Claude یا سایت claude.ai/code ادامه می‌دهی (Claude Code یا افزونه‌ی VS Code آن باید نصب و وارد حساب شده باشد). بار اول برنامه یک پنجره‌ی Claude باز می‌کند: Enter بزن تا به پوشه اعتماد کند.
 
 ### استفاده
-در بات: ⚡ Wake (روشن) · 🤖 Claude Remote · ▶️ برنامه‌های انتخابی (اجرا) · 🔒 Lock (قفل) · ⏻ Shut down (خاموش) · 📡 Relay · ➕ Add PC (کامپیوتر جدید)
+در بات: ⚡ Wake (روشن) · 🤖 Claude Remote · ▶️ برنامه‌های انتخابی (اجرا) · 🔒 Lock (قفل) · ⏻ Shut down (خاموش) · 📡 Relay · ➕ Add PC (کامپیوتر جدید) · 🛑 Kill switch (قطع همه‌چیز)
 
 </div>
