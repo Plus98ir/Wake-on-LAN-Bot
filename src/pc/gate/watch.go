@@ -169,9 +169,17 @@ func watchOnce() {
 					continue
 				}
 				w.Inc = append(w.Inc, Incident{ID: newID(), Kind: kind, Detail: fmt.Sprintf("%d failed Windows logon(s)", len(fresh)), TS: now, Status: "pending"})
-			} else if strings.Join(old, "\n") != strings.Join(cur, "\n") && !pending[kind] {
+			} else if same := strings.Join(old, "\n") == strings.Join(cur, "\n"); !same && !pending[kind] {
 				w.Inc = append(w.Inc, Incident{ID: newID(), Kind: kind, Detail: diff(old, cur), TS: now, Status: "pending"})
 			} else {
+				if same && pending[kind] { // the change was undone: back to the approved state
+					for i := range w.Inc {
+						if w.Inc[i].Kind == kind && w.Inc[i].Status == "pending" {
+							w.Inc[i].Status = "reverted"
+							logf("WATCH REVERTED %s %s (back to the approved state)", w.Inc[i].ID, kind)
+						}
+					}
+				}
 				continue
 			}
 			in := w.Inc[len(w.Inc)-1]
