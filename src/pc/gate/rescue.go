@@ -137,7 +137,7 @@ func rescueMux(setup bool) http.Handler {
 		setState("saved", "")
 		reply(w)
 		if os.Getenv("WOLGATE_DIR") == "" {
-			go func() { time.Sleep(3 * time.Second); os.Exit(0) }()
+			go func() { time.Sleep(3 * time.Second); closeRescueWindows(); os.Exit(0) }()
 		}
 	})
 	mux.HandleFunc("/api/pass", func(w http.ResponseWriter, r *http.Request) {
@@ -273,7 +273,12 @@ func rescueFail(why string) {
 func rescueClose() {
 	run("schtasks", "/change", "/tn", `WOL\RescueUI`, "/disable")
 	run("schtasks", "/change", "/tn", `WOL\Rescue`, "/disable")
-	psRun(`Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -match 'WOLRescue' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`)
+	closeRescueWindows()
+}
+
+// the Edge window of the rescue / set-recovery page (its own profile folder WOLRescue)
+func closeRescueWindows() {
+	psRun(`Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -match 'WOLRescue' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`)
 }
 
 func edgePath() string {
