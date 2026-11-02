@@ -8,7 +8,9 @@
     -ClaudeDir <folder>  (where the bot's "Claude Remote" button starts Claude Code; default Documents)
     -ClaudeMode hidden|vscode  (run Claude Remote in the background, or in the VS Code Claude panel)
     -AppsFile <json>  ([{name, path, args}] = the bot's app buttons; default v2rayN + VS Code)
-    -Update  (already paired: only save apps + Claude settings)
+    -Update  (already paired: only save apps + Claude settings, and re-read the trusted passkeys)
+    -GateExe <wol-gate.exe>  (WOL Agent passes it) + -AuthUrl https://auth.example.com (manual mode):
+       the server key may then only run wol-gate, and every action needs a passkey signature checked here
 #>
 param(
   [string]$PairCode,
@@ -25,6 +27,8 @@ param(
   [string]$ClaudeDir,
   [string]$ClaudeMode,
   [string]$AppsFile,
+  [string]$GateExe,
+  [string]$AuthUrl,
   [switch]$NoLockAtLogon,
   [switch]$Update,
   [switch]$Detect,
@@ -309,6 +313,24 @@ Start-Process -FilePath `$exe -ArgumentList 'remote-control', '--name', '$Name' 
   }
 }
 
+# The PC's own gatekeeper: the server key may only run wol-gate.exe, which runs an action only with
+# a fresh passkey signature over exactly that action, checked against the passkeys trusted here.
+function Set-Gate($url) {
+  if (-not $url) { Write-Host "  no fingerprint site on the server (wolbot auth) - gate skipped" -ForegroundColor Yellow; return }
+  if (-not $GateExe -or -not (Test-Path $GateExe)) { Write-Host "  this build has no wol-gate.exe - gate skipped" -ForegroundColor Yellow; return }
+  if ($GateExe -ne "$Agent\wol-gate.exe") { Copy-Item $GateExe "$Agent\wol-gate.exe" -Force }
+  icacls "$Agent\wol-gate.exe" /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" "*S-1-5-32-545:RX" | Out-Null
+  & "$Agent\wol-gate.exe" trust $url --all
+  & "$Agent\wol-gate.exe" list | ForEach-Object { Write-Host "  $_" }
+  # the bot key (from pairing; on -Update the line with the wolbot@ comment)
+  $match = if ($BotKey) { "*" + (($BotKey -split '\s+')[0..1] -join ' ') + "*" } else { "* wolbot@*" }
+  $force = 'command="' + "$Agent\wol-gate.exe" + '",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty '
+  $lines = Get-Content $AdminKeys | ForEach-Object { if ($_ -like $match) { $force + ($_ -replace '^command="[^"]*",\S* ', '') } else { $_ } }
+  Set-Content $AdminKeys $lines -Encoding ascii
+  Lock-Acl $AdminKeys
+  Write-Host "  gate on: the server can only run signed actions on this PC" -ForegroundColor Green
+}
+
 if ($Uninstall) {
   Get-ScheduledTask -TaskPath "\WOL\" -ErrorAction SilentlyContinue | ForEach-Object { Stop-ScheduledTask -InputObject $_ -ErrorAction SilentlyContinue; $_ } | Unregister-ScheduledTask -Confirm:$false
   Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" | Where-Object { $_.CommandLine -match "wol-agent" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
@@ -328,6 +350,11 @@ if ($Update) {
   $conf | Add-Member -NotePropertyName claude_dir -NotePropertyValue $ClaudeDir -Force
   $conf | Add-Member -NotePropertyName claude_mode -NotePropertyValue $ClaudeMode -Force
   $conf | ConvertTo-Json | Set-Content "$Agent\agent.json" -Encoding utf8
+  if ($conf.auth_url -and (Test-Path "$Agent\wol-gate.exe")) {
+    Write-Host "Trusted passkeys"
+    if (-not $GateExe) { $GateExe = "$Agent\wol-gate.exe" }
+    Set-Gate $conf.auth_url
+  }
   Write-Host ""
   Write-Host "Saved. In the bot press 🔄 Refresh on this PC to see the new buttons." -ForegroundColor Green
   exit 0
@@ -351,6 +378,7 @@ if ($PairCode) {
   $hostPort = $Matches[1]; $code = $Matches[2]
   $AppList = @(Resolve-Apps)
   $body = @{ code = $code; name = $Name; mac = $Mac; os = "windows"; user = $env:USERNAME; tunnel_key = $pub; wake_host = $WakeHost
+             gate = [bool]($GateExe -and (Test-Path $GateExe))
              apps = @($AppList | ForEach-Object { @{ name = $_.name; task = $_.task } }) } | ConvertTo-Json -Depth 4
   try {
     $r = Invoke-RestMethod -Uri "http://$hostPort/pair" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 20
@@ -358,13 +386,13 @@ if ($PairCode) {
     $msg = $_.ErrorDetails.Message; if (-not $msg) { $msg = $_.Exception.Message }
     Write-Host "  Pairing failed: $msg" -ForegroundColor Red; exit 1
   }
-  $Server = $r.server; $ServerPort = $r.ssh_port; $TunnelUser = $r.tunnel_user; $TunnelPort = $r.tunnel_port; $BotKey = $r.bot_key; $Name = $r.name
+  $Server = $r.server; $ServerPort = $r.ssh_port; $TunnelUser = $r.tunnel_user; $TunnelPort = $r.tunnel_port; $BotKey = $r.bot_key; $Name = $r.name; $AuthUrl = $r.auth_url
   Write-Host "  Paired as '$Name' (tunnel port $TunnelPort on $Server)"
 } else {
   Write-Host "[3/7] Manual mode (no pair code)"
   if (-not $Server -or -not $BotKey) { Write-Host "  Need -PairCode, or -Server and -BotKey" -ForegroundColor Red; exit 1 }
 }
-@{ server = $Server; ssh_port = $ServerPort; tunnel_user = $TunnelUser; tunnel_port = $TunnelPort; name = $Name; claude_dir = $ClaudeDir; claude_mode = $ClaudeMode } | ConvertTo-Json | Set-Content "$Agent\agent.json" -Encoding utf8
+@{ server = $Server; ssh_port = $ServerPort; tunnel_user = $TunnelUser; tunnel_port = $TunnelPort; name = $Name; claude_dir = $ClaudeDir; claude_mode = $ClaudeMode; auth_url = $AuthUrl } | ConvertTo-Json | Set-Content "$Agent\agent.json" -Encoding utf8
 
 Write-Host "[4/7] OpenSSH Server + bot key"
 if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
@@ -381,6 +409,7 @@ foreach ($k in @($BotKey) + $ExtraKey) {
   if (-not ($have | Where-Object { $_ -like "*$kb*" })) { Add-Content -Path $AdminKeys -Value $k -Encoding ascii }
 }
 Lock-Acl $AdminKeys
+Set-Gate $AuthUrl
 
 Write-Host "[5/7] Scheduled tasks"
 $ssh = "$env:WINDIR\System32\OpenSSH\ssh.exe"

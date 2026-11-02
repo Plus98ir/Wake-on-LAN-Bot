@@ -428,7 +428,7 @@ func trust(site string, yes []string) error {
 		take := false
 		if yes != nil {
 			for _, n := range yes {
-				take = take || n == k.Name
+				take = take || n == k.Name || n == "*"
 			}
 			k.Allow = []string{"all"}
 		} else {
@@ -472,12 +472,15 @@ func main() {
 	switch os.Args[1] {
 	case "trust":
 		if len(os.Args) < 3 {
-			fmt.Println("wol-gate trust <https://auth-site> [--yes name,name]")
+			fmt.Println("wol-gate trust <https://auth-site> [--yes name,name | --all]")
 			os.Exit(2)
 		}
 		var yes []string
 		if len(os.Args) > 4 && os.Args[3] == "--yes" {
 			yes = strings.Split(os.Args[4], ",")
+		}
+		if len(os.Args) > 3 && os.Args[3] == "--all" { // setup: trust what the server has right now
+			yes = []string{"*"}
 		}
 		if err := trust(os.Args[2], yes); err != nil {
 			fmt.Println("error:", err)

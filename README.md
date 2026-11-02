@@ -75,6 +75,24 @@ Config: `/etc/wol-bot/config.json`. Service: `systemctl status wol-bot`. Uninsta
 ### Phone app (PWA) - no Bale / Telegram needed
 After `wolbot auth https://auth.example.com`, that address is also an installable phone app: open it in Chrome / Safari, **Add to Home screen**, log in with your fingerprint. Same buttons as the bot, live status every 5 s, the fingerprint prompt right inside the app, admins see the events log. Without a bot token (`token` empty in the config) wolbot runs as the app only. Login = passkey (no password), session cookie `HttpOnly; Secure; SameSite=Strict`, every request needs the app's own header and origin.
 
+**Quick start for your own setup**
+1. Server: `sudo bash install.sh --public-host <server>` (no bot token needed), then a domain with HTTPS to `127.0.0.1:8791` and `wolbot auth https://auth.example.com && systemctl restart wol-bot`.
+2. Your phone: `wolbot admin <any id you choose, e.g. 1>`, `wolbot passkey-add Phone 1`, open the link on the phone, touch the sensor.
+3. Each PC: `wolbot pair-code` on the server, run **WOL Agent.exe** on the PC, paste the code. The PC gate (below) is installed and trusts the passkeys registered at that moment.
+4. Open `https://auth.example.com` on the phone, **Add to Home screen**, log in.
+
+### PC gate - the PC approves every action itself
+WOL Agent installs `wol-gate.exe` and forces the server's key to it (`command=` in `administrators_authorized_keys`): no shell, no terminal, no port forwarding. Every action that changes something (lock, who, restart, shut down, apps, Claude) must carry a fresh passkey signature over exactly that action, on exactly that PC, with a time and a one-time nonce, and the **PC checks it against the passkeys it trusts**. A hacked server cannot run anything; without a signature it only gets online/offline, button names, Claude running yes/no, and the kill switch.
+- Every request is logged in `C:\ProgramData\wol-agent\gate.log` and shown on the PC screen; 3 refused requests in 10 minutes and the PC itself starts the kill switch.
+- Trusted passkeys: `wol-gate list`. A new phone: register it on the server, then **WOL Agent -> Update** (or `wol-gate trust https://auth.example.com` to pick keys by hand). Remove one: `wol-gate untrust <name>`.
+- Any other key in `administrators_authorized_keys` (e.g. a laptop for VS Code Remote-SSH) is a door around the gate: keep that file to the gated key only.
+- Recommended on the PC (admin PowerShell): block all inbound connections (the tunnel is outgoing, Wake-on-LAN works below Windows), make UAC ask, and stop remote-desktop tools you do not use:
+  ```powershell
+  Set-NetFirewallProfile -All -DefaultInboundAction Block -AllowInboundRules False
+  Set-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System ConsentPromptBehaviorAdmin 2
+  Set-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System PromptOnSecureDesktop 1
+  ```
+
 ### Fingerprint confirmation and kill switch (optional, recommended)
 With it on, every button that does something (wake, apps, lock, who, restart, shut down, Claude, add PC, relay, remove) first answers with **🔐 Confirm with fingerprint**. The link opens a page on your own domain, your phone asks for your fingerprint (a passkey, WebAuthn) and only then the command runs. Someone who gets into your Bale/Telegram account still cannot do anything without your phone and your finger.
 
@@ -108,9 +126,13 @@ Only for opening the PC in VS Code from another laptop. Paste your laptop's `id_
 
 ### Build the app
 ```
-cd src/pc/app
+cd src/pc/gate
+go test ./... && go build -trimpath -ldflags "-s -w" -o wol-gate.exe .
+copy wol-gate.exe ..\app\
+cd ..\app
 go build -trimpath -ldflags "-H windowsgui -s -w" -o "WOL Agent.exe" .
 ```
+WOL Agent embeds `wol-gate.exe`, so build the gate first.
 No dependencies. Icon/manifest live in `rsrc_windows_amd64.syso` (`windres -O coff -F pe-x86-64 -i app.rc -o rsrc_windows_amd64.syso`).
 
 ### Security notes
@@ -165,6 +187,19 @@ sudo bash install.sh --token <توکن-بات> --public-host <آی‌پی-سرو
 
 ### اپ گوشی (PWA) - بدون بله و تلگرام
 بعد از `wolbot auth https://auth.example.com` همان آدرس یک اپ نصب‌شدنی است: در Chrome یا Safari بازش کن، **Add to Home screen** بزن و با اثر انگشت وارد شو. همان دکمه‌های بات، وضعیت زنده هر ۵ ثانیه، اثر انگشت داخل خود اپ و فهرست رویدادها برای ادمین. اگر توکن بات خالی باشد، wolbot فقط به‌صورت اپ کار می‌کند.
+
+**راه‌اندازی برای خودت**
+1. سرور: `sudo bash install.sh --public-host <سرور>` (توکن بات لازم نیست)، یک دامنه با HTTPS به `127.0.0.1:8791`، بعد `wolbot auth https://auth.example.com && systemctl restart wol-bot`
+2. گوشی: `wolbot admin 1` و `wolbot passkey-add Phone 1`، لینک را در گوشی باز کن و انگشت بگذار.
+3. هر کامپیوتر: روی سرور `wolbot pair-code`، روی کامپیوتر **WOL Agent.exe** و چسباندن کد. دروازه‌ی کامپیوتر (پایین) نصب می‌شود و به Passkeyهای همان لحظه اعتماد می‌کند.
+4. در گوشی `https://auth.example.com` را باز کن، **Add to Home screen** و ورود.
+
+### دروازه‌ی کامپیوتر: خود کامپیوتر هر دستور را تأیید می‌کند
+WOL Agent برنامه‌ی `wol-gate.exe` را نصب می‌کند و کلید سرور فقط می‌تواند همین را اجرا کند: نه shell، نه ترمینال، نه port forward. هر دستوری که چیزی را تغییر می‌دهد باید امضای تازه‌ی اثر انگشت روی **همان دستور، همان کامپیوتر، با زمان و عدد یک‌بارمصرف** داشته باشد و **خود کامپیوتر** آن را با Passkeyهایی که به آن‌ها اعتماد دارد چک می‌کند. سرور هک‌شده هیچ کاری نمی‌تواند بکند.
+- هر درخواست در `C:\ProgramData\wol-agent\gate.log` ثبت و روی صفحه‌ی کامپیوتر نشان داده می‌شود؛ ۳ رد در ۱۰ دقیقه = کیل‌سوییچ به تصمیم خود کامپیوتر.
+- فهرست: `wol-gate list`؛ گوشی جدید: ثبت روی سرور، بعد **WOL Agent ← Update**؛ حذف: `wol-gate untrust <اسم>`.
+- هر کلید دیگری در `administrators_authorized_keys` راهی دور از دروازه است؛ فقط کلید دروازه را نگه دار.
+- پیشنهاد (PowerShell ادمین): بستن همه‌ی اتصال‌های ورودی و روشن کردن UAC (دستورها در بخش انگلیسی).
 
 ### تأیید با اثر انگشت و کیل‌سوییچ (اختیاری، پیشنهادی)
 وقتی روشن باشد، هر دکمه‌ای که کاری انجام می‌دهد (روشن، برنامه‌ها، قفل، Who، ری‌استارت، خاموش، Claude، Add PC، Relay، حذف) اول دکمه‌ی **🔐 Confirm with fingerprint** می‌دهد. لینک یک صفحه روی دامنه‌ی خودت باز می‌کند، گوشی اثر انگشتت را می‌خواهد (Passkey) و فقط بعد از آن دستور اجرا می‌شود. کسی که حساب بله‌ات را داشته باشد، بدون گوشی و انگشت تو کاری نمی‌تواند بکند.

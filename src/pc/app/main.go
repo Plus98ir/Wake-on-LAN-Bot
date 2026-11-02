@@ -29,6 +29,10 @@ var setupPS []byte
 //go:embed icon.png
 var iconPNG []byte
 
+// built from ../gate and copied here before `go build` (see README)
+//go:embed wol-gate.exe
+var gateExe []byte
+
 const createNoWindow = 0x08000000
 
 var (
@@ -36,6 +40,7 @@ var (
 	pingMu   sync.Mutex
 	runMu    sync.Mutex
 	script   string
+	gate     string
 )
 
 func main() {
@@ -49,6 +54,8 @@ func main() {
 	// UTF-8 BOM so Windows PowerShell 5.1 reads the script as UTF-8
 	bom := []byte{0xEF, 0xBB, 0xBF}
 	_ = os.WriteFile(script, append(bom, bytes.TrimPrefix(setupPS, bom)...), 0o644)
+	gate = filepath.Join(os.TempDir(), "wol-gate-setup.exe")
+	_ = os.WriteFile(gate, gateExe, 0o755)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -179,9 +186,9 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 	case "uninstall":
 		args = []string{"-Uninstall"}
 	case "update":
-		args = append([]string{"-Update"}, appArgs(req)...)
+		args = append([]string{"-Update", "-GateExe", gate}, appArgs(req)...)
 	case "install":
-		args = []string{"-PairCode", req.Code}
+		args = []string{"-PairCode", req.Code, "-GateExe", gate}
 		if req.Name != "" {
 			args = append(args, "-Name", req.Name)
 		}

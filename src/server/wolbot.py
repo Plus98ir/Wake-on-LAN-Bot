@@ -768,7 +768,8 @@ def pair(cfg, req, client_ip):
         cfg["machines"].append(m)
     port = (m.get("pc") or {}).get("port") or free_port(cfg)
     m["os"] = req.get("os", "windows")
-    m["pc"] = {"port": port, "user": str(req.get("user") or "Administrator"), "tunnel_key": key}
+    m["pc"] = {"port": port, "user": str(req.get("user") or "Administrator"), "tunnel_key": key,
+               "gate": bool(req.get("gate")) and bool(auth_cfg(cfg))}
     if "apps" in req:  # app buttons chosen in WOL Agent
         new = apps_from(req["apps"])
         if new is not None:
@@ -785,6 +786,7 @@ def pair(cfg, req, client_ip):
     return m, {
         "ok": True, "name": m["name"], "server": cfg.get("public_host"), "ssh_port": cfg.get("ssh_port", 22),
         "tunnel_user": "woltun", "tunnel_port": port, "bot_key": open(KEY + ".pub").read().strip(),
+        "auth_url": (auth_cfg(cfg) or {}).get("url", ""),  # the PC installs wol-gate and trusts these passkeys
     }
 
 
