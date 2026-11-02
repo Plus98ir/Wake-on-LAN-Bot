@@ -177,14 +177,14 @@ def magic_packet(mac):
     return b"\xff" * 6 + bytes.fromhex(norm_mac(mac).replace(":", "")) * 16
 
 
-def run_ssh(host, port, user, cmd, key=None, timeout=20):
+def run_ssh(host, port, user, cmd, key=None, timeout=20, inp=None):
     args = ["ssh", "-p", str(port), "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=5", "-o", "StrictHostKeyChecking=accept-new"]
     if key:
         args += ["-i", key, "-o", f"UserKnownHostsFile={KNOWN}", "-o", "IdentitiesOnly=yes"]
     args += [f"{user}@{host}", cmd]
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, input=inp)
         return p.returncode, (p.stdout + p.stderr).strip()
     except subprocess.TimeoutExpired:
         return 124, "timeout"
@@ -276,6 +276,45 @@ def pc_run(m, cmd, timeout=20):
     return run_ssh("127.0.0.1", pc["port"], pc.get("user", "Administrator"), cmd, KEY, timeout)
 
 
+# PCs with wol-gate.exe accept only JSON requests; changing actions must carry a passkey
+# signature over exactly that action on exactly that PC (checked by the PC itself).
+GATE_ACTS = {"l": "lock", "u": "who", "R": "restart", "H": "shutdown", "c": "claude", "k": "claude_stop", "a": "app"}
+
+
+def gated(m):
+    return bool((m.get("pc") or {}).get("gate"))
+
+
+def gate_call(m, req, timeout=40):
+    return run_ssh("127.0.0.1", m["pc"]["port"], m["pc"].get("user", "Administrator"), "gate", KEY, timeout,
+                   json.dumps(req))
+
+
+def gate_req(cfg, data):
+    """(machine, act, arg) a button press needs signed for its PC, or None."""
+    parts = data.split(":")
+    if len(parts) < 2 or parts[0] not in GATE_ACTS or not parts[1].isdigit():
+        return None
+    m = cfg["machines"][int(parts[1])]
+    if not gated(m):
+        return None
+    arg = ""
+    if parts[0] == "a":
+        names = list(apps(m))
+        j = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else -1
+        hit = re.search(r"WOL\\(\w+)", apps(m)[names[j]]) if 0 <= j < len(names) else None
+        if not hit:
+            return None
+        arg = hit.group(1)
+    return m["name"], GATE_ACTS[parts[0]], arg
+
+
+def bound_challenge(machine, act, arg, ts, nonce):
+    """The challenge the phone signs: the PC recomputes it, so the signature fits only this action."""
+    h = hashlib.sha256(f"wolbot1|{machine}|{act}|{arg}|{ts}|{nonce}".encode()).digest()
+    return b64u(h)
+
+
 def actions(m):
     return {**OS_ACTIONS[m.get("os", "windows")], **m.get("actions", {})}
 
@@ -306,7 +345,7 @@ def sync_apps(cfg, m):
     """Pick up the app buttons saved on the PC (WOL Agent -> Save)."""
     if m.get("os", "windows") != "windows":
         return
-    rc, out = pc_run(m, f"type {APPS_FILE}")
+    rc, out = gate_call(m, {"act": "apps"}) if gated(m) else pc_run(m, f"type {APPS_FILE}")
     try:
         new = apps_from(json.loads(out.lstrip("\ufeff"))) if rc == 0 else None
     except ValueError:
@@ -794,7 +833,10 @@ def ip_watch():
                 auto = [w for w in m.get("wake", []) if w["type"] == "udp" and w.get("auto")]
                 if not auto or not online(m):
                     continue
-                rc, out = pc_run(m, f"curl -s -m 8 {url}")
+                if gated(m):
+                    rc, out = gate_call(m, {"act": "ip", "arg": str(cfg.get("pair_port", 8790))})
+                else:
+                    rc, out = pc_run(m, f"curl -s -m 8 {url}")
                 ip = out.strip()
                 if rc != 0 or not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
                     continue
@@ -1074,7 +1116,7 @@ def kill(api, reason):
     report = []
     for m in cfg["machines"]:
         if m.get("pc") and online(m) and "kill" in actions(m):
-            rc, out = pc_run(m, actions(m)["kill"], timeout=40)
+            rc, out = gate_call(m, {"act": "kill"}) if gated(m) else pc_run(m, actions(m)["kill"], timeout=40)
             # the PC cuts this very session, so a dropped connection (255) means it worked
             report.append(f"{m['name']}: " + ("cut off" if rc in (0, 255) else f"failed ({out[-120:]})"))
     notify(api, cfg, "🛑 KILL SWITCH\n" + reason + "\n\n" + "\n".join(report or ["no PC was online"])
@@ -1263,8 +1305,9 @@ paint();
 
 # ---------- phone app (PWA) ----------
 
-def run_action(cfg, uid, data):
-    """One app button press (already allowed and, if needed, confirmed); returns the text to show."""
+def run_action(cfg, uid, data, proof=None):
+    """One app button press (already allowed and, if needed, confirmed); returns the text to show.
+    proof = the signed request for a PC with wol-gate."""
     parts = data.split(":")
     op = parts[0]
     if op not in ("s", "cs"):  # those two are just looking
@@ -1276,6 +1319,18 @@ def run_action(cfg, uid, data):
         return pair_view(cfg)[0]
     i = int(parts[1])
     m = cfg["machines"][i]
+    if gated(m) and op in GATE_ACTS:
+        if not proof:
+            return "this PC needs a fingerprint for that"
+        rc, out = gate_call(m, proof)
+        if op == "u" and rc == 0:
+            return out[-800:] or "(nobody logged on)"
+        return f"{OP_NAMES.get(op, op)}: " + ("done ✅ (checked by the PC itself)" if rc == 0 else f"refused by the PC ({out[-200:]})")
+    if gated(m) and op == "cs":
+        rc, out = gate_call(m, {"act": "cs"})
+        out = ANSI.sub("", out)
+        url = re.search(r"https://claude\.ai/\S+", out)
+        return f"🤖 Claude Remote Control is on: {url.group(0)}" if url else "🤖 " + (out[-400:] or "not running")
     if op == "w":
         ok, report = wake(m)
         return ("⚡ Magic packet sent." if ok else "❌ Wake failed.") + "\n" + "\n".join(report)
@@ -1474,16 +1529,22 @@ def auth_server(api):
                     return self.reply(403, {"error": "not allowed for you"})
                 if a.get("locked") and op not in ("s", "x"):
                     return self.reply(423, {"error": "kill switch is on"})
-                if not needs_auth(cfg, op):
+                g = gate_req(cfg, data)
+                if not needs_auth(cfg, op) and not g:
                     return self.reply(200, {"note": run_action(cfg, uid, data)})
                 if not user_keys(cfg, uid):
                     return self.reply(403, {"error": "no passkey for you"})
                 cid = secrets.token_urlsafe(18)
+                conf = {"uid": uid, "data": data, "label": action_label(cfg, data), "exp": now + AUTH_TTL,
+                        "challenge": b64u(secrets.token_bytes(32))}
+                if g:  # the PC itself will check this signature
+                    ts, nonce = int(now), secrets.token_urlsafe(18)
+                    conf["gate"] = {"act": g[1], "arg": g[2], "ts": ts, "nonce": nonce}
+                    conf["challenge"] = bound_challenge(g[0], g[1], g[2], ts, nonce)
                 with LOCK:
                     for k in [k for k, c in WEB_CONFIRMS.items() if c["exp"] < now]:
                         WEB_CONFIRMS.pop(k)
-                    WEB_CONFIRMS[cid] = {"uid": uid, "data": data, "label": action_label(cfg, data),
-                                         "challenge": b64u(secrets.token_bytes(32)), "exp": now + AUTH_TTL}
+                    WEB_CONFIRMS[cid] = conf
                 c = WEB_CONFIRMS[cid]
                 return self.reply(200, {"need": "fp", "id": cid, "challenge": c["challenge"], "rpId": rp(a)[0],
                                         "label": c["label"], "allow": [k["id"] for k in user_keys(cfg, uid)]})
@@ -1509,7 +1570,8 @@ def auth_server(api):
                 if action_label(cfg, c["data"]) != c["label"]:
                     return self.reply(409, {"error": "the machine list changed, try again"})
                 s["exp"] = max(s["exp"], now + 60 * int(a.get("session_min", 10)))  # a fingerprint extends the login
-                return self.reply(200, {"note": run_action(cfg, uid, c["data"])})
+                proof = dict(c["gate"], cred=body["cred"]) if c.get("gate") else None
+                return self.reply(200, {"note": run_action(cfg, uid, c["data"], proof)})
             return self.reply(404, {"error": "not found"})
 
         def do_GET(self):  # noqa: N802 - http.server API
@@ -1518,6 +1580,9 @@ def auth_server(api):
             path = urllib.parse.urlsplit(self.path).path
             if path in APP_FILES:
                 return self.static(path)
+            if path == "/api/pubkeys":  # public keys only: each PC picks which it trusts (wol-gate trust)
+                return self.reply(200, [{f: k[f] for f in ("id", "pub", "alg", "name", "owner")}
+                                        for k in (a or {}).get("keys", [])])
             if path == "/api/state":
                 _, s = self.session()
                 if not s:
@@ -1770,6 +1835,12 @@ def main(argv):
         return auth_cli(cmd, argv[1:])
     if cmd == "user":
         return user_cli(argv[1:])
+    if cmd == "gate":  # wolbot gate <machine> on|off: the PC runs wol-gate.exe
+        cfg = load()
+        m = find(cfg, argv[1])
+        m["pc"]["gate"] = argv[2] == "on"
+        save(cfg)
+        return print(f"{m['name']}: gate {'on' if m['pc']['gate'] else 'off'} (no restart needed)")
     if cmd == "help" or cmd not in ("set-token", "admin", "add-pc", "add-wake", "del", "list", "wake", "status"):
         return print(HELP)
     cfg = load()
