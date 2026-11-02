@@ -47,7 +47,11 @@ NOTIFIED = {}            # stranger id -> last alert time
 PROTECT = "walRHckDpy"   # buttons that need a fingerprint (config auth.protect overrides)
 OP_NAMES = {"w": "Wake", "a": "Start", "l": "Lock", "u": "Who", "R": "Restart", "H": "Shut down",
             "c": "Claude Remote", "k": "Stop Claude", "D": "Remove", "p": "Add PC (pair code)",
-            "y": "Relay code"}
+            "y": "Relay code", "L": "Log in"}
+# What a limited user (config "users") may be given -> the buttons it opens. Admins can do everything.
+PERMS = {"wake": "w", "apps": "a", "claude": "ck", "lock": "l", "who": "u", "restart": "rR",
+         "shutdown": "hH", "vscode": "v"}
+SESSIONS = {}            # user id -> end of the fingerprint login
 
 CLAUDE_PS = r"powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\wol-agent\wol-claude.ps1"
 
@@ -345,7 +349,8 @@ def status_line(m):
     return "🟢 online" if st else "🔴 offline"
 
 
-def machine_view(cfg, i, note=""):
+def machine_view(cfg, i, note="", uid=None):
+    """Machine page; uid limits the buttons to what that person may press (None = everything)."""
     m = cfg["machines"][i]
     text = f"🖥 {m['name']}  ({m['mac']})\nStatus: {status_line(m)}"
     for w in m.get("wake", []):
@@ -365,14 +370,17 @@ def machine_view(cfg, i, note=""):
         kb.append([btn("💻 VS Code Remote-SSH", f"v:{i}")])
     kb.append([btn("📡 Relay (no public IP)", f"y:{i}")])
     kb.append([btn("🗑 Remove", f"d:{i}"), btn("⬅️ Machines", "m")])
+    kb = [r for r in ([b for b in row if may(cfg, uid, b["callback_data"].split(":")[0], i)] for row in kb) if r]
     return text, kb
 
 
-def list_view(cfg):
-    lines = [f"🖥 {m['name']}: {status_line(m)}" for m in cfg["machines"]] or ["No machines yet."]
-    kb = [[btn(f"🖥 {m['name']}", f"o:{i}")] for i, m in enumerate(cfg["machines"])]
-    kb.append([btn("➕ Add PC", "p")])
-    if auth_cfg(cfg):
+def list_view(cfg, uid=None):
+    mine = [(i, m) for i, m in enumerate(cfg["machines"]) if may(cfg, uid, "o", i)]
+    lines = [f"🖥 {m['name']}: {status_line(m)}" for _, m in mine] or ["No machines yet."]
+    kb = [[btn(f"🖥 {m['name']}", f"o:{i}")] for i, m in mine]
+    if may(cfg, uid, "p"):
+        kb.append([btn("➕ Add PC", "p")])
+    if auth_cfg(cfg) and may(cfg, uid, "x"):
         kb.append([btn("🛑 Kill switch", "x")])
     text = "Machines\n\n" + "\n".join(lines)
     if (auth_cfg(cfg) or {}).get("locked"):
@@ -449,7 +457,7 @@ def relay_view(cfg, i):
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
 
-def claude_wait(api, cfg, chat, mid, i):
+def claude_wait(api, cfg, chat, mid, i, uid=None):
     """Poll the PC until Claude Remote Control prints its link (or an error)."""
     m = cfg["machines"][i]
     out = ""
@@ -478,7 +486,7 @@ def claude_wait(api, cfg, chat, mid, i):
                 f"session \"{m['name']}\".\n\n" + out[-500:])
     else:
         note = "🤖 Claude did not start:\n" + out[-600:]
-    t, kb = machine_view(cfg, i, note)
+    t, kb = machine_view(cfg, i, note, uid)
     api.edit(chat, mid, t, kb)
 
 
@@ -498,17 +506,17 @@ def vscode_help(cfg, m):
             f"Then in VS Code: Remote-SSH: Connect to Host -> {m['name'].lower()}")
 
 
-def wait_online(api, cfg, chat, mid, i):
+def wait_online(api, cfg, chat, mid, i, uid=None):
     m = cfg["machines"][i]
     start = time.time()
     while time.time() - start < WAKE_WAIT:
         if online(m):
-            t, kb = machine_view(cfg, i, f"✅ {m['name']} is online after {int(time.time() - start)} s.")
+            t, kb = machine_view(cfg, i, f"✅ {m['name']} is online after {int(time.time() - start)} s.", uid)
             api.edit(chat, mid, t, kb)
             return
         time.sleep(5)
     t, kb = machine_view(cfg, i, f"⚠️ No answer after {WAKE_WAIT // 60} min. "
-                                 "Check BIOS/NIC WOL, auto-logon and the WOL\\Tunnel task.")
+                                 "Check BIOS/NIC WOL, auto-logon and the WOL\\Tunnel task.", uid)
     api.edit(chat, mid, t, kb)
 
 
@@ -524,10 +532,22 @@ def handle_callback(api, cfg, cb, confirmed=False):
             pass
     parts = data.split(":")
     op = parts[0]
-    if not confirmed and needs_auth(cfg, op):
-        return ask_auth(api, cfg, str(cb["from"]["id"]), chat, mid, data)
-    if op == "m":
-        t, kb = list_view(cfg)
+    uid = str(cb["from"]["id"])
+    idx = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    if not confirmed:
+        if op not in ("L", "x", "X") and not logged_in(cfg, uid):
+            t, kb = login_view(cfg, uid)
+            return api.edit(chat, mid, t, kb)
+        if not may(cfg, uid, op, idx):
+            return api.edit(chat, mid, "⛔ This is not allowed for you.", [[btn("⬅️ Machines", "m")]])
+        if op == "L" or needs_auth(cfg, op):
+            return ask_auth(api, cfg, uid, chat, mid, data)
+    elif login_on(cfg):  # a fingerprint just proved it is them: (re)start the login
+        SESSIONS[uid] = time.time() + 60 * int(auth_cfg(cfg).get("session_min", 10))
+    if op in ("m", "L"):
+        t, kb = list_view(cfg, uid)
+        if op == "L":
+            t = f"✅ Logged in for {auth_cfg(cfg).get('session_min', 10)} min.\n\n" + t
         return api.edit(chat, mid, t, kb)
     if op == "x":
         kb = [[btn("🛑 Yes, cut everything off", "X"), btn("✖️ Cancel", "m")]]
@@ -556,7 +576,7 @@ def handle_callback(api, cfg, cb, confirmed=False):
         note = ("⚡ Magic packet sent." if ok else "❌ Wake failed.") + "\n" + "\n".join(report)
         if ok and m.get("pc") and not online(m):
             note += f"\nWaiting up to {WAKE_WAIT // 60} min for it to come online..."
-            threading.Thread(target=wait_online, args=(api, cfg, chat, mid, i), daemon=True).start()
+            threading.Thread(target=wait_online, args=(api, cfg, chat, mid, i, uid), daemon=True).start()
     elif op == "a":
         names = list(apps(m))
         j = int(parts[2])
@@ -582,7 +602,7 @@ def handle_callback(api, cfg, cb, confirmed=False):
             note = f"🤖 Claude: failed ({out[-200:]}). Run the new WOL Agent on the PC to add it."
         else:
             note = "🤖 Starting Claude Remote Control..."
-            threading.Thread(target=claude_wait, args=(api, cfg, chat, mid, i), daemon=True).start()
+            threading.Thread(target=claude_wait, args=(api, cfg, chat, mid, i, uid), daemon=True).start()
     elif op == "k":
         rc, out = pc_run(m, actions(m)["claude_stop"])
         note = "⏹ Claude: " + (out[-200:] if rc == 0 else f"failed ({out[-200:]})")
@@ -598,9 +618,9 @@ def handle_callback(api, cfg, cb, confirmed=False):
         cfg["machines"].pop(i)
         save(cfg)
         write_tunnel_keys(cfg)
-        t, kb = list_view(cfg)
+        t, kb = list_view(cfg, uid)
         return api.edit(chat, mid, f"Removed {m['name']}.\n\n" + t, kb)
-    t, kb = machine_view(cfg, i, note)
+    t, kb = machine_view(cfg, i, note, uid)
     return api.edit(chat, mid, t, kb)
 
 
@@ -609,7 +629,6 @@ def serve():
     if not cfg.get("token"):
         raise SystemExit("No bot token in config. Run: wolbot set-token <token>")
     api = Api(cfg)
-    admins = {str(a).lstrip("b") for a in cfg.get("admins", [])}
     offset = 0
     pair_server(api)
     auth_server(api)
@@ -628,18 +647,18 @@ def serve():
                 cfg = load()  # pick up edits without a restart
                 if "callback_query" in u:
                     cb = u["callback_query"]
-                    if str(cb["from"]["id"]) not in admins:
+                    if not known(cfg, cb["from"]["id"]):
                         stranger(api, cfg, cb["from"], f"pressed {cb.get('data', '')!r}")
                         continue
                     handle_callback(api, cfg, cb)
                 elif "message" in u:
                     msg = u["message"]
                     uid = str(msg["from"]["id"])
-                    if uid not in admins:
+                    if not known(cfg, uid):
                         stranger(api, cfg, msg["from"], f"wrote {str(msg.get('text', ''))[:60]!r}")
                         api.send(msg["chat"]["id"], f"Not allowed. Your id: {uid}")
                         continue
-                    t, kb = list_view(cfg)
+                    t, kb = list_view(cfg, uid) if logged_in(cfg, uid) else login_view(cfg, uid)
                     api.send(msg["chat"]["id"], t, kb)
             except Exception as e:  # noqa: BLE001 - one bad update must not stop the bot
                 print(f"update {u.get('update_id')}: {e}", flush=True)
@@ -866,6 +885,54 @@ def rp(a):
 def needs_auth(cfg, op):
     a = auth_cfg(cfg)
     return bool(a) and op in a.get("protect", PROTECT)
+
+
+def is_admin(cfg, uid):
+    return str(uid) in {str(a).lstrip("b") for a in cfg.get("admins", [])}
+
+
+def user_of(cfg, uid):
+    """Limited user {"name", "allow": [PERMS keys], "machines": [names] or []}, or None."""
+    return (cfg.get("users") or {}).get(str(uid))
+
+
+def known(cfg, uid):
+    return is_admin(cfg, uid) or user_of(cfg, uid) is not None
+
+
+def may(cfg, uid, op, i=None):
+    """May this person press button op (on machine index i)? uid None = no limit."""
+    if uid is None or is_admin(cfg, uid):
+        return True
+    u = user_of(cfg, uid)
+    if u is None:
+        return False
+    if op not in ("m", "o", "s", "L") and not any(op in PERMS.get(p, "") for p in u.get("allow", [])):
+        return False
+    if i is not None and u.get("machines"):
+        return i < len(cfg["machines"]) and cfg["machines"][i]["name"] in u["machines"]
+    return True
+
+
+def login_on(cfg):
+    a = auth_cfg(cfg)
+    return bool(a) and a.get("login", True)
+
+
+def logged_in(cfg, uid):
+    return not login_on(cfg) or SESSIONS.get(str(uid), 0) > time.time()
+
+
+def login_view(cfg, uid):
+    a = auth_cfg(cfg)
+    text = (f"🔐 Log in with your fingerprint to see your machines.\n"
+            f"The login lasts {a.get('session_min', 10)} min.")
+    if a.get("locked"):
+        text = "🛑 Kill switch is ON - every action is blocked.\n\n" + text
+    kb = [[btn("🔐 Log in with fingerprint", "L")]]
+    if may(cfg, uid, "x"):
+        kb.append([btn("🛑 Kill switch", "x")])
+    return text, kb
 
 
 def user_keys(cfg, uid):
@@ -1305,9 +1372,47 @@ Fingerprint confirmation (passkeys) + kill switch:
                                                127.0.0.1:<port> (default 8791). `wolbot auth off` = off
   wolbot passkey-add <name> [user id]          one-time link to register a phone (default: first admin)
   wolbot passkey-list | passkey-del <name>
+  wolbot auth login <minutes> | off            fingerprint login before the bot shows anything (default on, 10 min)
   wolbot kill                                  kill switch now (same as the bot button)
   wolbot unlock                                allow actions again after a kill switch
+
+Limited users (admins can do everything):
+  wolbot user add <id> <name> <perm,perm|all> [machine,machine]
+                                               perms: wake, apps, claude, lock, who, restart, shutdown, vscode
+  wolbot user list | user del <id>
 """
+
+
+def user_cli(args):
+    cfg = load()
+    users = cfg.setdefault("users", {})
+    sub = args[0] if args else "list"
+    if sub == "add" and len(args) >= 4:
+        uid, name, allow = args[1], args[2], args[3]
+        allow = list(PERMS) if allow == "all" else [p.strip() for p in allow.split(",") if p.strip()]
+        bad = [p for p in allow if p not in PERMS]
+        if bad or not uid.isdigit():
+            raise SystemExit(f"bad id or permission {bad}; permissions: {', '.join(PERMS)} or all")
+        machines = [x for x in args[4].split(",") if x] if len(args) > 4 else []
+        names = {m["name"] for m in cfg["machines"]}
+        if [x for x in machines if x not in names]:
+            raise SystemExit(f"unknown machine; known: {', '.join(sorted(names))}")
+        users[uid] = {"name": re.sub(r"[^\w .-]", "", name)[:30], "allow": allow, "machines": machines}
+        save(cfg)
+        return print(f"Saved. Next: wolbot passkey-add {name} {uid}   (they must /start the bot once)")
+    if sub == "del" and len(args) > 1:
+        users.pop(args[1], None)
+        a = cfg.get("auth") or {}
+        a["keys"] = [k for k in a.get("keys", []) if str(k["owner"]) != args[1]]
+        save(cfg)
+        return print("Removed the user and their passkeys.")
+    if sub == "list":
+        for uid, u in users.items():
+            print(f"{uid}  {u['name']}  allow={','.join(u['allow'])}  machines={','.join(u['machines']) or 'all'}")
+        return print(f"{len(users)} user(s); admins (everything): {', '.join(map(str, cfg.get('admins', [])))}")
+    raise SystemExit("wolbot user add <id> <name> <perm,perm|all> [machine,machine]\n"
+                     "wolbot user list | user del <id>\n"
+                     f"permissions: {', '.join(PERMS)}")
 
 
 def auth_cli(cmd, args):
@@ -1316,6 +1421,16 @@ def auth_cli(cmd, args):
     if cmd == "auth":
         if not args:
             raise SystemExit("wolbot auth <https://auth.example.com> [port]   or   wolbot auth off")
+        if args[0] == "login":
+            v = args[1] if len(args) > 1 else ""
+            if v == "off":
+                a["login"] = False
+            elif v.isdigit() and 1 <= int(v) <= 1440:
+                a["login"], a["session_min"] = True, int(v)
+            else:
+                raise SystemExit("wolbot auth login <minutes 1-1440> | off")
+            save(cfg)
+            return print("Saved (no restart needed).")
         if args[0] == "off":
             a["url"] = ""
         else:
@@ -1354,8 +1469,8 @@ def auth_cli(cmd, args):
     if not args:
         raise SystemExit("wolbot passkey-add <name> [user id]")
     owner = args[1] if len(args) > 1 else str((cfg.get("admins") or [""])[0]).lstrip("b")
-    if owner not in {str(x).lstrip("b") for x in cfg.get("admins", [])}:
-        raise SystemExit(f"{owner} is not an admin (wolbot admin <id>)")
+    if not known(cfg, owner):
+        raise SystemExit(f"{owner} is not an admin or user (wolbot admin <id> / wolbot user add ...)")
     code = one_time_code()
     codes = load_enroll()
     codes[code] = {"exp": time.time() + PAIR_TTL, "owner": owner, "name": re.sub(r"[^\w .-]", "", args[0])[:30]}
@@ -1381,6 +1496,8 @@ def main(argv):
                      f"{new_pair_code(m['name'])}  (one use, {PAIR_TTL // 60} min)")
     if cmd in ("auth", "passkey-add", "passkey-list", "passkey-del", "kill", "unlock"):
         return auth_cli(cmd, argv[1:])
+    if cmd == "user":
+        return user_cli(argv[1:])
     if cmd == "help" or cmd not in ("set-token", "admin", "add-pc", "add-wake", "del", "list", "wake", "status"):
         return print(HELP)
     cfg = load()
