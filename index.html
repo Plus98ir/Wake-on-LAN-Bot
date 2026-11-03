@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wake-on-LAN Bot</title>
-<meta name="description" content="Turn your PC on from your phone with a Bale or Telegram bot, then start its apps. Every button confirmed with your fingerprint.">
+<meta name="description" content="Turn your PC on from your phone, control it with your fingerprint and get an alert when something changes on it. Phone app, with an optional Bale or Telegram bot.">
 <meta property="og:image" content="https://raw.githubusercontent.com/Plus98ir/Wake-on-LAN-Bot/main/Wake-on-LAN-Bot.png">
 <link rel="icon" href="src/pc/app/icon.png">
 <style>
@@ -74,8 +74,8 @@ footer a,main a{color:var(--acc)}
         <div>🔁 Restart</div><div>⏻ Shut down</div>
         <div class="wide">🛑 Kill switch</div>
       </div>
-      <div class="msg" style="margin:10px 0 0">🔐 Shut down on PC<br>Confirm with your fingerprint within 2 min.</div>
-      <div class="kb"><div class="wide acc">🔐 Confirm with fingerprint</div></div>
+      <div class="msg" style="margin:10px 0">🔔 ⚠️ PC: new service<br><b>Steam Client Service</b><br>✅ Looks like a normal install<br>Signed by: Valve Corp.</div>
+      <div class="kb"><div class="acc">✅ Approve</div><div>⛔ Deny</div></div>
     </div>
   </section>
 
@@ -85,6 +85,8 @@ footer a,main a{color:var(--acc)}
     <div class="card"><div class="ic">▶️</div><h3 data-t="f2"></h3><p data-t="f2d"></p></div>
     <div class="card"><div class="ic">💻</div><h3 data-t="f3"></h3><p data-t="f3d"></p></div>
     <div class="card"><div class="ic">🛡</div><h3 data-t="f4"></h3><p data-t="f4d"></p></div>
+    <div class="card"><div class="ic">📡</div><h3 data-t="f5"></h3><p data-t="f5d"></p></div>
+    <div class="card"><div class="ic">🔔</div><h3 data-t="f6"></h3><p data-t="f6d"></p></div>
   </div>
 
   <h2 data-t="secT"></h2>
@@ -97,6 +99,9 @@ footer a,main a{color:var(--acc)}
     <div class="card"><div class="ic">👥</div><h3 data-t="g6"></h3><p data-t="g6d"></p></div>
     <div class="card"><div class="ic">📱</div><h3 data-t="g7"></h3><p data-t="g7d"></p></div>
     <div class="card"><div class="ic">🧱</div><h3 data-t="g8"></h3><p data-t="g8d"></p></div>
+    <div class="card"><div class="ic">👁</div><h3 data-t="g9"></h3><p data-t="g9d"></p></div>
+    <div class="card"><div class="ic">🔍</div><h3 data-t="g10"></h3><p data-t="g10d"></p></div>
+    <div class="card"><div class="ic">🆘</div><h3 data-t="g11"></h3><p data-t="g11d"></p></div>
   </div>
   <pre style="margin-top:16px">wolbot auth https://auth.example.com      # reverse proxy -> 127.0.0.1:8791
 wolbot passkey-add Phone                  # open the link on your phone, touch the sensor
@@ -105,9 +110,9 @@ wolbot user add 123456 Ali wake,lock PC   # limited user: only wake + lock, only
 wolbot passkey-add Ali 123456</pre>
 
   <h2 data-t="howT"></h2>
-  <pre class="diagram">Phone (bot)  ──►  Your server (wolbot)  ──►  router / modem  ──magic packet──►  PC
-                         ▲                                                     │
-                         └─────────── reverse SSH tunnel (opened by the PC) ◄──┘</pre>
+  <pre class="diagram">Phone (app or bot)  ──►  Your server (wolbot)  ──►  router / modem  ──magic packet──►  PC
+                                ▲                                                     │
+                                └─────────── reverse SSH tunnel (opened by the PC) ◄──┘</pre>
 
   <h2 data-t="stepsT"></h2>
   <ol class="steps">
@@ -120,50 +125,62 @@ wolbot passkey-add Ali 123456</pre>
   <h2 data-t="srvT"></h2>
   <pre>git clone https://github.com/Plus98ir/Wake-on-LAN-Bot.git
 cd Wake-on-LAN-Bot/src/server
-sudo bash install.sh --token &lt;BOT_TOKEN&gt; --public-host &lt;server-ip&gt;
-wolbot admin &lt;your-id&gt; &amp;&amp; systemctl restart wol-bot</pre>
+sudo bash install.sh --public-host &lt;server-ip&gt;    # add --token &lt;BOT_TOKEN&gt; for a bot
+wolbot auth https://auth.example.com              # the phone app: a domain with HTTPS -> 127.0.0.1:8791
+wolbot admin 1 &amp;&amp; systemctl restart wol-bot
+wolbot passkey-add Phone 1                        # open the link on your phone, touch the sensor</pre>
 </main>
 <footer data-t="foot"></footer>
 <script>
 const L={
-fa:{h1:"کامپیوترت را از <span>توی گوشی</span> روشن کن",sub:"با یک بات بله یا تلگرام: روشن کن، برنامه‌هایت را اجرا کن، قفل یا خاموشش کن. پشت هر مودمی کار می‌کند.",
+fa:{h1:"کامپیوترت را از <span>توی گوشی</span> روشن کن",sub:"با اپ گوشی (یا بات بله و تلگرام): روشنش کن، برنامه‌هایت را اجرا کن، قفل یا خاموشش کن. هر دستور با اثر انگشت است و اگر چیزی روی کامپیوتر عوض شود، گوشی‌ات خبر می‌دهد.",
  dl:"دانلود WOL Agent",docs:"راهنمای کامل",whatT:"چه کار می‌کند؟",
- f1:"روشن کردن از راه دور",f1d:"یک دکمه در بات، کامپیوتر خاموش روشن می‌شود و بات خبر می‌دهد کی بالا آمد.",
- f2:"اجرای برنامه‌ها",f2d:"هر برنامه‌ای که بخواهی (تا ۱۲ تا) دکمه‌ی خودش را در بات دارد؛ Claude Remote پشت صحنه یا در VS Code؛ قفل، ری‌استارت و خاموش کردن هم هست.",
- f3:"Claude از توی گوشی",f3d:"یک دکمه Claude Code را روی کامپیوتر روشن می‌کند و از اپ Claude ادامه می‌دهی.",
- f4:"امن",f4d:"کامپیوتر خودش به سرور وصل می‌شود؛ کد اتصال یک‌بار مصرف است، فقط ادمین به بات دسترسی دارد و هر دکمه اثر انگشت می‌خواهد.",
+ f1:"روشن کردن از راه دور",f1d:"یک دکمه در اپ یا بات، کامپیوتر خاموش روشن می‌شود و خبر می‌دهد کی بالا آمد.",
+ f2:"اجرای برنامه‌ها",f2d:"هر برنامه‌ای که بخواهی (تا ۱۲ تا) دکمه‌ی خودش را دارد؛ قفل، ری‌استارت، خاموش کردن و دیدن کاربر واردشده هم هست.",
+ f3:"Claude از توی گوشی",f3d:"یک دکمه Claude Code را پشت صحنه یا در پنجره‌ی VS Code روشن می‌کند و از اپ Claude یا claude.ai/code ادامه می‌دهی.",
+ f4:"امن",f4d:"کامپیوتر خودش به سرور وصل می‌شود؛ کد اتصال یک‌بار مصرف است، هر دکمه اثر انگشت می‌خواهد و خود کامپیوتر هم امضا را چک می‌کند.",
+ f5:"روی بیشتر مودم‌ها",f5d:"WOL Agent پورت را با UPnP باز می‌کند (UDP و TCP، پورت ۹ یا 47009). آی‌پی عمومی نداری؟ یک رله‌ی کوچک در خانه کافی است.",
+ f6:"هشدار با صدا روی گوشی",f6d:"تغییر مشکوک، کیل‌سوییچ و درخواست باز کردن قفل با صدای اعلان گوشی خبر داده می‌شوند، حتی با اپ بسته. محتوا رمز شده است. کارهای روزمره صدا ندارند.",
  howT:"چطور کار می‌کند؟",stepsT:"راه‌اندازی در ۴ قدم",
- s1:"سرور",s1d:"اسکریپت نصب را روی یک سرور لینوکسی اجرا کن و توکن بات را بده.",
+ s1:"سرور",s1d:"اسکریپت نصب را روی یک سرور لینوکسی اجرا کن و یک دامنه با HTTPS برای اپ گوشی بده. توکن بات اختیاری است.",
  s2:"BIOS",s2d:"ErP = Disabled و Power On By PCI-E = Enabled. کامپیوتر با کابل به مودم وصل باشد.",
- s3:"اتصال کامپیوتر",s3d:"در بات بزن ➕ Add PC، برنامه‌ی WOL Agent را اجرا کن و کد را بچسبان.",
- s4:"مودم",s4d:"TD-LTE / ۴G؟ یک گوشی قدیمی در خانه را رله کن (📡 Relay)، مودم تنظیم نمی‌خواهد. وگرنه پورت UDP 9 را به آی‌پی کامپیوتر فوروارد کن.",
- secT:"تأیید با اثر انگشت و کیل‌سوییچ",
+ s3:"اتصال کامپیوتر",s3d:"در اپ بزن ➕ Add PC، برنامه‌ی WOL Agent را اجرا کن، کد را بچسبان و یک رمز بازیابی انتخاب کن.",
+ s4:"مودم",s4d:"با UPnP و آی‌پی عمومی کاری لازم نیست، WOL Agent پورت را باز می‌کند. TD-LTE / ۴G؟ یک گوشی قدیمی در خانه را رله کن (📡 Relay). وگرنه پورت را دستی فوروارد کن. یک بار بعد از خاموشی طولانی تستش کن.",
+ secT:"امنیت: اثر انگشت، نگهبان و کیل‌سوییچ",
  g1:"هر دکمه با اثر انگشت",g1d:"روشن، خاموش، قفل، برنامه‌ها و Claude اول یک لینک تأیید می‌دهند؛ گوشی اثر انگشتت را می‌خواهد (Passkey / WebAuthn) و فقط بعد از آن دستور اجرا می‌شود. لینک یک‌بار مصرف است و ۲ دقیقه اعتبار دارد.",
- g2:"کیل‌سوییچ",g2d:"۳ تأیید ناموفق در ۱۰ دقیقه، یا زدن دکمه‌ی 🛑: بات همه‌چیز را می‌بندد و کامپیوتر قفل می‌شود، SSH و تونل خاموش و کارت شبکه قطع می‌شود. برگشت فقط پشت خود کامپیوتر.",
- g3:"گزارش غریبه‌ها",g3d:"هر کسی جز ادمین به بات پیام بدهد یا دکمه بزند، به تو خبر داده می‌شود.",
- g4:"هر نفر کلید خودش",g4d:"برای هر ادمین یک Passkey جدا ثبت می‌شود و هر وقت بخواهی باطلش می‌کنی. کسی که فقط حساب بله‌ات را دارد، بدون گوشی و اثر انگشتت کاری نمی‌تواند بکند.",
- g8:"خود کامپیوتر تأیید می‌کند",g8d:"روی هر کامپیوتر یک دروازه نصب می‌شود: هر دستور باید امضای اثر انگشت روی همان دستور و همان کامپیوتر را داشته باشد و خود کامپیوتر آن را چک می‌کند. حتی اگر سرور هک شود، کسی نمی‌تواند وارد کامپیوتر شود یا اطلاعاتش را بخواند.",
+ g2:"کیل‌سوییچ",g2d:"۳ تأیید ناموفق در ۱۰ دقیقه، زدن دکمه‌ی 🛑، یا رد کردن یا بی‌جواب ماندن یک تغییر خطرناک: همه‌ی دستورها بسته می‌شوند، کامپیوتر قفل می‌شود، SSH و تونل خاموش و کارت شبکه قطع می‌شود. برگشت فقط از پشت خود کامپیوتر.",
+ g3:"گزارش غریبه‌ها",g3d:"اگر بات روشن باشد، هر کسی جز ادمین به آن پیام بدهد یا دکمه بزند، به تو خبر داده می‌شود.",
+ g4:"هر نفر کلید خودش",g4d:"برای هر نفر یک Passkey جدا ثبت می‌شود و هر وقت بخواهی باطلش می‌کنی. کسی که حساب بله‌ات را دارد، بدون گوشی و اثر انگشتت کاری نمی‌تواند بکند.",
+ g8:"خود کامپیوتر تأیید می‌کند",g8d:"روی هر کامپیوتر یک دروازه نصب می‌شود: هر دستور باید امضای اثر انگشت روی همان دستور و همان کامپیوتر را داشته باشد و خود کامپیوتر آن را چک می‌کند. سرور هک‌شده نمی‌تواند چیزی اجرا کند یا به فایل‌ها برسد. فقط وضعیت و متن هشدارها را می‌بیند و می‌تواند کامپیوتر را قطع کند.",
+ g9:"نگهبان",g9d:"هر ۱۵ ثانیه ادمین‌ها، کاربرها، کلیدهای SSH، فایروال، UAC، ریموت دسکتاپ، ابزارهای ریموت، ورودهای ناموفق، سرویس‌ها و تسک‌ها را چک می‌کند. هر تغییر = قفل صفحه و سؤال از تو. تغییرهای خطرناک تا حدود ۱۵ ثانیه برگردانده می‌شوند و بی‌جواب ماندنشان تا ۹۰ ثانیه کیل‌سوییچ می‌زند. سرویس و تسک جدید فقط یک بار قفل می‌کنند و بدون مهلت منتظر جواب می‌مانند.",
+ g10:"نصب خودت یا حمله؟",g10d:"هشدار می‌گوید چه چیزی عوض شده: اسم، فایل، آرگومان‌ها و امضاکننده، با نتیجه‌ی «شبیه نصب عادی» یا «مشکوک». این فقط راهنماست، چون ابزار امضادار هم می‌تواند ناخواسته باشد. تأیید فقط همان چیزی را می‌پذیرد که دیده‌ای؛ هر چیز بعدی هشدار جدا دارد.",
+ g11:"بازیابی بعد از کیل‌سوییچ",g11d:"یک صفحه‌ی قرمز رمز بازیابی را می‌خواهد. رمز درست فقط اینترنت را برمی‌گرداند؛ بعد با اثر انگشت در اپ تأیید می‌کنی و خود کامپیوتر امضا را چک می‌کند و بقیه را برمی‌گرداند. ۵ رمز اشتباه = قفل ۱۵ دقیقه‌ای به بالا.",
  g7:"اپ گوشی، بدون بله",g7d:"همان آدرس تأیید، یک اپ نصب‌شدنی (PWA) است: روی صفحه‌ی گوشی نصب می‌شود، وضعیت زنده دارد و اثر انگشت داخل خود اپ است. بله و تلگرام دیگر لازم نیستند.",
  g5:"ورود با اثر انگشت",g5d:"حتی ادمین هم قبل از دیدن هر چیزی باید با اثر انگشت وارد شود. ورود ۱۰ دقیقه اعتبار دارد (قابل تنظیم).",
  g6:"دسترسی جدا برای هر کاربر",g6d:"ادمین از قبل تعیین می‌کند هر نفر کدام دکمه‌ها (روشن، قفل، خاموش، برنامه‌ها، Claude…) را روی کدام کامپیوترها ببیند. بقیه اصلاً نشان داده نمی‌شوند.",
  srvT:"نصب سرور",foot:"Wake-on-LAN Bot — متن‌باز روی <a href='https://github.com/Plus98ir/Wake-on-LAN-Bot'>GitHub</a>"},
-en:{h1:"Turn your PC on <span>from your phone</span>",sub:"With a Bale or Telegram bot: wake it, start your apps, lock it or shut it down. Works behind any modem.",
+en:{h1:"Turn your PC on <span>from your phone</span>",sub:"With a phone app (or a Bale / Telegram bot): wake it, start your apps, lock it or shut it down. Every action takes your fingerprint, and your phone tells you if something changes on the PC.",
  dl:"Download WOL Agent",docs:"Full guide",whatT:"What it does",
- f1:"Remote wake",f1d:"One button in the bot wakes the PC, and the bot tells you when it is up.",
- f2:"Start apps",f2d:"Any app you pick (up to 12) gets its own button; Claude Remote in the background or in VS Code; lock, restart and shut down too.",
- f3:"Claude from your phone",f3d:"One button starts Claude Code on the PC; continue in the Claude app.",
- f4:"Safe",f4d:"The PC connects out to your server; pair codes are one-time, only admins can use the bot and every button needs a fingerprint.",
+ f1:"Remote wake",f1d:"One button in the app or bot wakes the PC and tells you when it is up.",
+ f2:"Start apps",f2d:"Any app you pick (up to 12) gets its own button; lock, restart, shut down and see who is logged on too.",
+ f3:"Claude from your phone",f3d:"One button starts Claude Code in the background or in a VS Code window; continue in the Claude app or at claude.ai/code.",
+ f4:"Safe",f4d:"The PC connects out to your server; pair codes are one-time, every button needs a fingerprint and the PC checks that signature itself.",
+ f5:"On most modems",f5d:"WOL Agent opens the port by UPnP (UDP and TCP, port 9 or 47009). No public IP? A small relay at home is enough.",
+ f6:"Phone alerts with sound",f6d:"Suspicious changes, the kill switch and unlock requests ring with the phone's notification sound, even with the app closed. Encrypted. Everyday actions stay silent.",
  howT:"How it works",stepsT:"Set up in 4 steps",
- s1:"Server",s1d:"Run the install script on a Linux server and give it the bot token.",
+ s1:"Server",s1d:"Run the install script on a Linux server and give it a domain with HTTPS for the phone app. A bot token is optional.",
  s2:"BIOS",s2d:"ErP = Disabled, Power On By PCI-E = Enabled. The PC must be on a cable.",
- s3:"Link the PC",s3d:"Press ➕ Add PC in the bot, run WOL Agent and paste the code.",
- s4:"Modem",s4d:"TD-LTE / 4G? Make an old phone at home the relay (📡 Relay), no modem setup. Otherwise forward UDP port 9 to the PC's IP.",
- secT:"Fingerprint confirmation and kill switch",
+ s3:"Link the PC",s3d:"Press ➕ Add PC in the app, run WOL Agent, paste the code and choose a recovery password.",
+ s4:"Modem",s4d:"With UPnP and a public IP there is nothing to do: WOL Agent opens the port. TD-LTE / 4G? Make an old phone at home the relay (📡 Relay). Otherwise forward the port by hand. Test it once after a long time off.",
+ secT:"Security: fingerprint, watchdog and kill switch",
  g1:"Every button needs your fingerprint",g1d:"Wake, shut down, lock, apps and Claude first send a confirm link; your phone asks for your fingerprint (passkey / WebAuthn) and only then the command runs. One-time link, valid 2 minutes.",
- g2:"Kill switch",g2d:"3 failed checks in 10 minutes, or the 🛑 button: the bot blocks everything and the PC locks, stops SSH and the tunnel and turns its network off. Undo only at the PC.",
- g3:"Strangers reported",g3d:"Anyone who is not an admin writing to the bot or pressing a button is reported to you.",
- g4:"One key per person",g4d:"Each admin registers their own passkey and you can revoke it any time. Someone with only your Bale account cannot do anything without your phone and finger.",
- g8:"The PC approves it itself",g8d:"Each PC gets a gate: every action must carry a fingerprint signature over that exact action on that exact PC, and the PC checks it. Even a hacked server cannot get in or read anything.",
+ g2:"Kill switch",g2d:"3 failed checks in 10 minutes, the 🛑 button, or a dangerous change denied or left unanswered: every action is blocked and the PC locks, stops SSH and the tunnel and turns its network off. Undo only from the PC.",
+ g3:"Strangers reported",g3d:"With a bot on, anyone who is not an admin writing to it or pressing a button is reported to you.",
+ g4:"One key per person",g4d:"Each person registers their own passkey and you can revoke it any time. Someone with your Bale account cannot do anything without your phone and finger.",
+ g8:"The PC approves it itself",g8d:"Each PC gets a gate: every action must carry a fingerprint signature over that exact action on that exact PC, and the PC checks it. A hacked server cannot run anything or reach your files. It only sees status and alert text, and it can cut the PC off.",
+ g9:"Watchdog",g9d:"Every 15 s it checks administrators, users, SSH keys, firewall, UAC, Remote Desktop, remote-control tools, failed logons, services and tasks. Any change locks the screen and asks you. Dangerous changes are undone within about 15 s, and no answer within 90 s starts the kill switch. A new service or task locks once and waits with no deadline.",
+ g10:"Your install or an attack?",g10d:"The alert says what changed: name, file, arguments and signer, with a verdict of looks normal or suspicious. That is only a hint, since a signed tool can still be unwanted. Approving covers only what you saw; anything later gets its own alert.",
+ g11:"Recovery after a kill switch",g11d:"A red page asks for your recovery password. The right one brings back only the internet; then you approve with your fingerprint in the app, and the PC checks the signature and restores the rest. 5 wrong passwords lock it for 15 minutes or more.",
  g7:"Phone app, no Bale",g7d:"The same confirmation address is an installable app (PWA): add it to your home screen, live status, the fingerprint prompt right inside. Bale and Telegram become optional.",
  g5:"Fingerprint login",g5d:"Even the admin must log in with a fingerprint before the bot shows anything. A login lasts 10 minutes (adjustable).",
  g6:"Per-user permissions",g6d:"The admin decides in advance which buttons (wake, lock, shut down, apps, Claude...) each person gets, on which PCs. Everything else is hidden.",
