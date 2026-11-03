@@ -21,14 +21,22 @@ import (
 //go:embed watch.ps1
 var watchPS string
 
+//go:embed neutralize.ps1
+var neutralizePS string
+
 const (
 	watchEvery   = 15 * time.Second
-	answerWithin = 180 // seconds to approve a dangerous change before the kill switch
+	answerWithin = 90 // seconds to approve a dangerous change before the full network kill
 )
 
 // changes that open a way into the PC: no answer = kill switch. The rest only stay locked + logged.
 var dangerous = map[string]bool{"admins": true, "users": true, "firewall": true, "uac": true, "rdp": true,
 	"keys": true, "trusted": true, "remote": true, "failed": true}
+
+// dangerous kinds we can put straight back to the approved state the instant we see them, so the open
+// door is shut within one tick (the full network kill still follows if no one approves). keys/trusted
+// can't be rebuilt from a snapshot and failed is an event, so those fall through to lock + kill only.
+var neutralizable = map[string]bool{"rdp": true, "uac": true, "firewall": true, "admins": true, "users": true, "remote": true}
 
 type Incident struct {
 	ID     string `json:"id"`
@@ -133,6 +141,11 @@ func watchOnce() {
 		return
 	}
 	var toKill string
+	type neut struct {
+		kind      string
+		base, cur []string
+	}
+	var toNeut []neut
 	withWatch(func(w *Watch) {
 		now := time.Now().Unix()
 		w.Alive = now
@@ -172,7 +185,10 @@ func watchOnce() {
 			} else if same := strings.Join(old, "\n") == strings.Join(cur, "\n"); !same && !pending[kind] {
 				w.Inc = append(w.Inc, Incident{ID: newID(), Kind: kind, Detail: diff(old, cur), TS: now, Status: "pending"})
 			} else {
-				if same && pending[kind] { // the change was undone: back to the approved state
+				// a dangerous kind returning to base does NOT clear its incident (an attacker must not
+				// dodge the kill by undoing fast, and our own neutralize must not look like approval):
+				// only an app approve/deny/timeout resolves it. Lock-only kinds still auto-clear on undo.
+				if same && pending[kind] && !dangerous[kind] {
 					for i := range w.Inc {
 						if w.Inc[i].Kind == kind && w.Inc[i].Status == "pending" {
 							w.Inc[i].Status = "reverted"
@@ -185,7 +201,12 @@ func watchOnce() {
 			in := w.Inc[len(w.Inc)-1]
 			logf("WATCH INCIDENT %s %s: %s", in.ID, kind, in.Detail)
 			run("schtasks", "/run", "/tn", `WOL\Lock`)
-			tellDesk(fmt.Sprintf("change detected (%s) - screen locked. Approve it with your fingerprint in the app.", kind))
+			if neutralizable[kind] {
+				toNeut = append(toNeut, neut{kind, append([]string{}, old...), append([]string{}, cur...)})
+				tellDesk(fmt.Sprintf("change detected (%s) - door shut + screen locked. Approve it in the app, or the PC locks down fully.", kind))
+			} else {
+				tellDesk(fmt.Sprintf("change detected (%s) - screen locked. Approve it with your fingerprint in the app.", kind))
+			}
 		}
 		for i := range w.Inc {
 			in := &w.Inc[i]
@@ -201,8 +222,28 @@ func watchOnce() {
 			w.Inc = w.Inc[len(w.Inc)-100:]
 		}
 	})
+	for _, n := range toNeut {
+		neutralize(n.kind, n.base, n.cur)
+	}
 	if toKill != "" {
 		kill(toKill)
+	}
+}
+
+// neutralize puts one dangerous kind back to its approved state right away (before any full kill),
+// by running neutralize.ps1 with the approved (base) and current snapshot values for that kind.
+func neutralize(kind string, base, cur []string) {
+	if os.Getenv("WOLGATE_DIR") != "" { // tests must not touch the real PC
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{"kind": kind, "base": base, "cur": cur})
+	c := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPS(neutralizePS))
+	c.Env = append(os.Environ(), "WOLGATE_NEUT="+string(payload))
+	out, err := c.CombinedOutput()
+	if err != nil {
+		logf("WATCH NEUTRALIZE %s FAILED: %v %s", kind, err, strings.TrimSpace(string(out)))
+	} else {
+		logf("WATCH NEUTRALIZED %s (door shut; approve in the app or it locks down)", kind)
 	}
 }
 

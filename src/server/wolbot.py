@@ -903,9 +903,9 @@ def incident_watch():
                 for p in st.get("pending", []):
                     if p["id"] not in told:
                         told.add(p["id"])
-                        notify(API, cfg, f"⚠️ {m['name']}: change detected ({p['kind']}) - screen locked. "
+                        notify(API, cfg, f"⚠️ {m['name']}: change detected ({p['kind']}) - door shut + screen locked. "
                                          "Approve with your fingerprint or deny in the app"
-                                         + (" (no answer in 3 min = kill switch)." if p.get("kill") else "."))
+                                         + (" (no answer in 90 s = full network lockdown)." if p.get("kill") else "."))
                 key = "dead:" + m["name"]
                 if time.time() - st.get("alive", 0) > 120 and key not in told:
                     told.add(key)
