@@ -178,6 +178,39 @@ def magic_packet(mac):
     return b"\xff" * 6 + bytes.fromhex(norm_mac(mac).replace(":", "")) * 16
 
 
+def _csum(b):
+    if len(b) % 2:
+        b += b"\0"
+    t = sum(int.from_bytes(b[i:i + 2], "big") for i in range(0, len(b), 2))
+    while t >> 16:
+        t = (t & 0xFFFF) + (t >> 16)
+    return ~t & 0xFFFF
+
+
+def tcp_magic(host, port, mac):
+    """Magic packet as the payload of raw TCP segments (SYN, then PSH+ACK) to a modem TCP port forward.
+
+    A sleeping NIC answers nothing, so no handshake is possible - but it scans every frame for the
+    magic pattern. For networks that drop UDP. Needs root (raw socket)."""
+    dst = socket.gethostbyname(host)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:  # learn our source IP, sends nothing
+        u.connect((dst, int(port)))
+        src = u.getsockname()[0]
+    data = magic_packet(mac)
+    with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP) as s:
+        for _ in range(3):
+            for flags in (0x02, 0x18):  # SYN, PSH+ACK (loose conntrack on most modems forwards it too)
+                sport, seq = secrets.randbelow(40000) + 20000, secrets.randbits(32)
+                ack = secrets.randbits(32) if flags & 0x10 else 0
+                hdr = (sport.to_bytes(2, "big") + int(port).to_bytes(2, "big") + seq.to_bytes(4, "big")
+                       + ack.to_bytes(4, "big") + bytes([0x50, flags]) + (64240).to_bytes(2, "big"))
+                pseudo = (socket.inet_aton(src) + socket.inet_aton(dst) + bytes([0, socket.IPPROTO_TCP])
+                          + (20 + len(data)).to_bytes(2, "big"))
+                c = _csum(pseudo + hdr + b"\0\0\0\0" + data)
+                s.sendto(hdr + c.to_bytes(2, "big") + b"\0\0" + data, (dst, 0))
+            time.sleep(0.2)
+
+
 def run_ssh(host, port, user, cmd, key=None, timeout=20, inp=None):
     args = ["ssh", "-p", str(port), "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=5", "-o", "StrictHostKeyChecking=accept-new"]
@@ -213,6 +246,10 @@ def wake(m):
                         time.sleep(0.2)
                 good = True
                 report.append(f"udp {w['host']}:{addr[1]}: sent")
+            elif w["type"] == "tcp":
+                tcp_magic(w["host"], w.get("port", 9), mac)
+                good = True
+                report.append(f"tcp {w['host']}:{w.get('port', 9)}: sent")
             elif w["type"] == "relay":
                 with LOCK:
                     st = load_relay_state()
@@ -786,12 +823,14 @@ def pair(cfg, req, client_ip):
         if new is not None:
             m["apps"] = new
     if not m.get("wake"):
-        # any modem: UDP magic packet to its public address (needs a port forward of UDP 9)
-        # "auto": ip_watch follows the home IP while the PC is online
-        w = {"type": "udp", "host": req.get("wake_host") or client_ip, "port": 9}
-        if not req.get("wake_host"):
-            w["auto"] = True
-        m["wake"] = [w]
+        # any modem: magic packet to its public address (needs a port forward of UDP 9 or TCP 9;
+        # TCP for networks that drop UDP). "auto": ip_watch follows the home IP while the PC is online
+        m["wake"] = []
+        for t in ("udp", "tcp"):
+            w = {"type": t, "host": req.get("wake_host") or client_ip, "port": 9}
+            if not req.get("wake_host"):
+                w["auto"] = True
+            m["wake"].append(w)
     save(cfg)
     write_tunnel_keys(cfg)
     return m, {
@@ -871,14 +910,14 @@ def incident_watch():
 
 
 def ip_watch():
-    """Keep "auto" UDP wake targets on the home's current public IP (asked from the PC itself)."""
+    """Keep "auto" UDP/TCP wake targets on the home's current public IP (asked from the PC itself)."""
     while True:
         time.sleep(IP_CHECK)
         try:
             cfg = load()
             url = f"http://{cfg.get('public_host')}:{cfg.get('pair_port', 8790)}/ip"
             for m in cfg["machines"]:
-                auto = [w for w in m.get("wake", []) if w["type"] == "udp" and w.get("auto")]
+                auto = [w for w in m.get("wake", []) if w["type"] in ("udp", "tcp") and w.get("auto")]
                 if not auto or not online(m):
                     continue
                 if gated(m):
@@ -892,7 +931,7 @@ def ip_watch():
                 mm = next((x for x in cfg["machines"] if x["name"] == m["name"]), {})
                 changed = False
                 for w in mm.get("wake", []):
-                    if w["type"] == "udp" and w.get("auto") and w["host"] != ip:
+                    if w["type"] in ("udp", "tcp") and w.get("auto") and w["host"] != ip:
                         print(f"{mm['name']}: home IP {w['host']} -> {ip}", flush=True)
                         w["host"], changed = ip, True
                 if changed:
@@ -1801,6 +1840,7 @@ HELP = """wolbot - Wake-on-LAN bot
   wolbot add-wake <name> ssh <host> <port> <user> [iface]
                                                wake through a router / Linux box in the LAN (etherwake)
   wolbot add-wake <name> udp <host> [port]     wake by UDP magic packet to a modem port forward
+  wolbot add-wake <name> tcp <host> [port]     same over TCP (forward TCP port to the PC) - when UDP is blocked
   wolbot del <name>                            remove a machine
   wolbot list | wake <name> | status <name>
   wolbot pair-code                             one-time code for WOL Agent.exe (same as Add PC in the bot)
@@ -1972,10 +2012,10 @@ def main(argv):
         if argv[2] == "ssh":
             w = {"type": "ssh", "host": argv[3], "port": int(argv[4]), "user": argv[5],
                  "iface": argv[6] if len(argv) > 6 else "br-lan"}
-        elif argv[2] == "udp":
-            w = {"type": "udp", "host": argv[3], "port": int(argv[4]) if len(argv) > 4 else 9}
+        elif argv[2] in ("udp", "tcp"):
+            w = {"type": argv[2], "host": argv[3], "port": int(argv[4]) if len(argv) > 4 else 9}
         else:
-            raise SystemExit("type must be ssh or udp")
+            raise SystemExit("type must be ssh, udp or tcp")
         m["wake"] = [x for x in m.get("wake", []) if not (x["type"] == w["type"] and x.get("host") == w["host"])]
         m["wake"].append(w)
     elif cmd == "del":
