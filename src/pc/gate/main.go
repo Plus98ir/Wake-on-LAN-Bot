@@ -406,7 +406,17 @@ func serve() int {
 	writeJSON("gate-state.json", &s)
 	logf("OK %s %s by %s (%s)", r.Act, r.Arg, k.Name, k.Owner)
 	if r.Act != "who" && r.Act != "lock" {
-		tellDesk(fmt.Sprintf("%s %s approved by fingerprint of %s", r.Act, r.Arg, k.Name))
+		// whoever sits at the PC sees every remote action; an app by its name, not its task (App1)
+		what := r.Act + " " + r.Arg
+		var apps []struct{ Name, Task string }
+		if r.Act == "app" && readJSON("apps.json", &apps) == nil {
+			for _, a := range apps {
+				if a.Task == r.Arg {
+					what = "open " + a.Name
+				}
+			}
+		}
+		tellDesk(fmt.Sprintf("%s - approved from the app by fingerprint (%s)", what, k.Name))
 	}
 	out, err := act(&r)
 	fmt.Println(out)
