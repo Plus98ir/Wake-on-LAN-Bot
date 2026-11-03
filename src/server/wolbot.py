@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -61,6 +62,12 @@ APP_FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.j
 APP_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
            "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 EVENTS = os.path.join(HOME, "events.json")        # alerts shown in the app
+PUSH = os.path.join(HOME, "push.json")            # Web Push: {"vapid": key pair, "subs": phones}
+PUSH_LOCK = threading.Lock()
+PUSH_HOSTS = ("fcm.googleapis.com", "google.com", "push.apple.com", "push.services.mozilla.com", "notify.windows.com")
+PUSH_MAX = 20            # phones kept
+PUSH_TTL = 3600          # an alert older than an hour is no use (the app still lists it)
+PUSH_BODY = 600
 WEB = {}                 # app session token -> {"uid", "exp"}
 WEB_CONFIRMS = {}        # app confirmation id -> button press waiting for a fingerprint
 LOGIN_CH = {}            # app login id -> {"challenge", "exp"}
@@ -881,6 +888,23 @@ def relay_poll(cfg, qs):
         time.sleep(1)
 
 
+INC_FA = {"services": "سرویس جدید", "tasks": "تسک زمان‌بندی‌شده‌ی جدید", "remote": "ابزار ریموت", "admins": "تغییر ادمین‌ها",
+          "users": "تغییر کاربران", "firewall": "تغییر فایروال", "uac": "تغییر UAC", "rdp": "تغییر ریموت دسکتاپ",
+          "keys": "تغییر کلیدهای SSH", "trusted": "تغییر Passkeyها", "failed": "ورود ناموفق به ویندوز"}
+
+
+def incident_fa(name, p):
+    head = f"⚠️ {name}: {INC_FA.get(p['kind'], p['kind'])}"
+    items = p.get("items") or []
+    if items:
+        it = next((x for x in items if x.get("verdict") != "normal"), items[0])
+        state = "شبیه نصب عادی" if it.get("verdict") == "normal" else "🚨 مشکوک"
+        head += f": {it.get('name')} ({state}، امضا: {it.get('signer') or 'ندارد'})"
+    if p.get("kill"):
+        return head + ". صفحه قفل شد. تا ۹۰ ثانیه جواب نده = قطع کامل شبکه."
+    return head + ". صفحه قفل شد. کار خودت بود؟ در اپ تأیید کن، وگرنه رد."
+
+
 def incident_text(name, p):
     what = "; ".join(f"{it.get('name')} [{'looks normal' if it.get('verdict') == 'normal' else 'CHECK: ' + ', '.join(it.get('why') or [])}, "
                      f"{it.get('signer') or 'no valid signature'}, {it.get('path') or 'no file'}]" for it in p.get("items") or [])
@@ -910,9 +934,12 @@ def incident_watch():
                     continue
                 INCIDENTS[m["name"]] = st
                 for p in st.get("pending", []):
+                    # the PC looks up file + signature a moment after it locks: wait so the alert can name them
+                    if p["kind"] in ("services", "tasks", "remote") and not p.get("items") and time.time() - p.get("ts", 0) < 30:
+                        continue
                     if p["id"] not in told:
                         told.add(p["id"])
-                        notify(API, cfg, incident_text(m["name"], p))
+                        notify(API, cfg, incident_text(m["name"], p), incident_fa(m["name"], p))
                 key = "dead:" + m["name"]
                 if time.time() - st.get("alive", 0) > 120 and key not in told:
                     told.add(key)
@@ -1122,6 +1149,148 @@ def action_label(cfg, data):
     return name
 
 
+# ----- Web Push: alerts reach the phone (with its notification sound) even when the app is closed -----
+
+def push_load():
+    try:
+        with open(PUSH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def push_save(p):
+    tmp = PUSH + ".tmp"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        json.dump(p, f)
+    os.replace(tmp, PUSH)
+
+
+def push_key():
+    """Public VAPID key for the browser; the key pair is made once, here on the server."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    with PUSH_LOCK:
+        p = push_load()
+        if not p.get("vapid"):
+            k = ec.generate_private_key(ec.SECP256R1())
+            p["vapid"] = {"d": b64u(k.private_numbers().private_value.to_bytes(32, "big")),
+                          "pub": b64u(k.public_key().public_bytes(serialization.Encoding.X962,
+                                                                  serialization.PublicFormat.UncompressedPoint))}
+            push_save(p)
+        return p["vapid"]["pub"]
+
+
+def push_host_ok(url):
+    """The address comes from the browser: only real push services, so it can't aim the server elsewhere."""
+    try:
+        u = urllib.parse.urlsplit(url)
+        host, port = (u.hostname or "").lower(), u.port
+    except ValueError:
+        return False
+    return u.scheme == "https" and port in (None, 443) and not u.username and any(
+        host == h or host.endswith("." + h) for h in PUSH_HOSTS)
+
+
+def push_subscribe(uid, sub, lang):
+    """Save one phone. Returns True when it is new, None when the subscription is not valid."""
+    keys = sub.get("keys") if isinstance(sub, dict) else None
+    try:
+        endpoint, p256dh, auth = str(sub["endpoint"]), str(keys["p256dh"]), str(keys["auth"])
+        if len(endpoint) > 1024 or not push_host_ok(endpoint) or len(b64d(p256dh)) != 65 or len(b64d(auth)) != 16:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    with PUSH_LOCK:
+        p = push_load()
+        subs = p.get("subs", [])
+        new = not any(x["endpoint"] == endpoint for x in subs)
+        subs = [x for x in subs if x["endpoint"] != endpoint]
+        subs.append({"uid": str(uid), "endpoint": endpoint, "p256dh": p256dh, "auth": auth,
+                     "lang": "fa" if lang == "fa" else "en", "ts": int(time.time())})
+        p["subs"] = subs[-PUSH_MAX:]
+        push_save(p)
+    return new
+
+
+def push_remove(endpoint):
+    with PUSH_LOCK:
+        p = push_load()
+        p["subs"] = [x for x in p.get("subs", []) if x["endpoint"] != endpoint]
+        push_save(p)
+
+
+def push_encrypt(payload, p256dh, auth):
+    """RFC 8291 (aes128gcm): only the phone can read it, not the push service in between."""
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    def hkdf(salt, ikm, info, n):
+        return HKDF(algorithm=hashes.SHA256(), length=n, salt=salt, info=info).derive(ikm)
+
+    ua_pub = b64d(p256dh)
+    eph = ec.generate_private_key(ec.SECP256R1())
+    as_pub = eph.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    shared = eph.exchange(ec.ECDH(), ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), ua_pub))
+    ikm = hkdf(b64d(auth), shared, b"WebPush: info\x00" + ua_pub + as_pub, 32)
+    salt = secrets.token_bytes(16)
+    cek = hkdf(salt, ikm, b"Content-Encoding: aes128gcm\x00", 16)
+    nonce = hkdf(salt, ikm, b"Content-Encoding: nonce\x00", 12)
+    return salt + (4096).to_bytes(4, "big") + bytes([len(as_pub)]) + as_pub + AESGCM(cek).encrypt(nonce, payload + b"\x02", None)
+
+
+def push_vapid(endpoint, vapid, subject):
+    """RFC 8292: a signed note that this server sent it."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    u = urllib.parse.urlsplit(endpoint)
+    claims = {"aud": f"{u.scheme}://{u.netloc}", "exp": int(time.time()) + 12 * 3600, "sub": subject}
+    msg = b64u(json.dumps({"typ": "JWT", "alg": "ES256"}).encode()) + "." + b64u(json.dumps(claims).encode())
+    key = ec.derive_private_key(int.from_bytes(b64d(vapid["d"]), "big"), ec.SECP256R1())
+    r, s = decode_dss_signature(key.sign(msg.encode(), ec.ECDSA(hashes.SHA256())))
+    return f"vapid t={msg}.{b64u(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))}, k={vapid['pub']}"
+
+
+def push_one(sub, msg, vapid, subject):
+    """Send to one phone; returns the HTTP status. A phone that gave up its subscription is forgotten."""
+    req = urllib.request.Request(sub["endpoint"], method="POST",
+                                 data=push_encrypt(json.dumps(msg, ensure_ascii=False).encode(), sub["p256dh"], sub["auth"]))
+    req.add_header("Authorization", push_vapid(sub["endpoint"], vapid, subject))
+    req.add_header("Content-Encoding", "aes128gcm")
+    req.add_header("Content-Type", "application/octet-stream")
+    req.add_header("TTL", str(PUSH_TTL))
+    req.add_header("Urgency", "high")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410):
+            push_remove(sub["endpoint"])
+        print(f"push {urllib.parse.urlsplit(sub['endpoint']).hostname}: HTTP {e.code} {e.read()[:200]!r}", flush=True)
+        return e.code
+
+
+def push_send(cfg, text, fa=None, urgent=True, only_uid=None):
+    """Every phone of an admin (or of one user: the test button). Returns the statuses."""
+    p = push_load()
+    a = auth_cfg(cfg) or {}
+    done = []
+    for sub in p.get("subs", []):
+        if not is_admin(cfg, sub["uid"]) or (only_uid is not None and sub["uid"] != str(only_uid)):
+            continue
+        body = fa if fa and sub.get("lang") == "fa" else text
+        msg = {"title": "wolbot", "body": body[:PUSH_BODY], "urgent": urgent, "tag": secrets.token_hex(4)}
+        try:
+            done.append(push_one(sub, msg, p["vapid"], a.get("url") or "https://localhost"))
+        except Exception as e:  # noqa: BLE001 - a bad phone must not stop the alert for the others
+            print(f"push: {e}", flush=True)
+            done.append(0)
+    return done
+
+
 def log_event(text):
     """Keep the last 200 alerts for the app (admins see them)."""
     with LOCK:
@@ -1136,9 +1305,10 @@ def log_event(text):
         os.chmod(EVENTS, 0o600)
 
 
-def notify(api, cfg, text):
+def notify(api, cfg, text, fa=None):
     print(text.replace("\n", " | "), flush=True)
     log_event(text)
+    threading.Thread(target=push_send, args=(cfg, text, fa), daemon=True).start()
     if api is None:  # app-only mode: no bot to send it through
         return
     for a in cfg.get("admins", []):
@@ -1506,7 +1676,7 @@ def app_state(cfg, uid, exp):
                          "apps": list(apps(m)) if "a" in btns else [], "gate": gated(m),
                          "incidents": (INCIDENTS.get(m["name"]) or {}).get("pending", []) if is_admin(cfg, uid) else []})
     u = user_of(cfg, uid) or {}
-    st = {"uid": uid, "name": u.get("name") or "admin", "admin": is_admin(cfg, uid), "locked": bool(a.get("locked")),
+    st = {"push_key": push_key() if is_admin(cfg, uid) else "", "uid": uid, "name": u.get("name") or "admin", "admin": is_admin(cfg, uid), "locked": bool(a.get("locked")),
           "left": int(exp - time.time()), "protect": a.get("protect", PROTECT), "machines": machines,
           "can_pair": may(cfg, uid, "p"), "can_kill": may(cfg, uid, "x")}
     names = {m["name"]: i for i, m in enumerate(cfg["machines"])}
@@ -1649,6 +1819,24 @@ def auth_server(api):
             if not s:
                 return self.reply(401, {"error": "log in"})
             uid = s["uid"]
+            if path.startswith("/api/push/"):
+                if not is_admin(cfg, uid):  # alerts are for admins only
+                    return self.reply(403, {"error": "admins only"})
+                if path == "/api/push/sub":
+                    new = push_subscribe(uid, body.get("sub"), body.get("lang"))
+                    if new is None:
+                        return self.reply(400, {"error": "bad subscription"})
+                    if new:  # one more device now reads the alerts: the owner should know
+                        notify(API, cfg, f"🔔 Alerts turned on for a new device by {uid} (from {self.ip()})",
+                               f"🔔 هشدارها برای یک دستگاه جدید روشن شد ({self.ip()})")
+                    return self.reply(200, {"ok": True, "new": new})
+                if path == "/api/push/off":
+                    push_remove(str(body.get("endpoint", "")))
+                    return self.reply(200, {"ok": True})
+                if path == "/api/push/test":
+                    sent = push_send(cfg, "🔔 Test: alerts work on this phone.", "🔔 تست: هشدارها روی این گوشی کار می‌کنند.", only_uid=uid)
+                    return self.reply(200, {"ok": any(200 <= c < 300 for c in sent), "sent": sent})
+                return self.reply(404, {"error": "not found"})
             if path == "/api/begin":
                 op = str(body.get("op", ""))
                 i, j = body.get("i"), body.get("j")

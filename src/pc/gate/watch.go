@@ -189,6 +189,16 @@ func watchTick(snap map[string][]string) {
 			logf("WATCH: first snapshot saved (%d categories)", len(snap))
 			return
 		}
+		// approved lists from before this service was left out of the snapshot
+		var kept []string
+		for _, x := range w.Base["services"] {
+			if x != "PIEServiceNew" {
+				kept = append(kept, x)
+			}
+		}
+		if len(kept) != len(w.Base["services"]) {
+			w.Base["services"] = kept
+		}
 		pending := map[string]bool{}
 		shown := map[string]string{} // kind -> what its pending incident told the owner
 		for _, in := range w.Inc {

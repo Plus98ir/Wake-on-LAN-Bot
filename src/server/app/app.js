@@ -13,6 +13,9 @@ const T = {
     rescue: n => `🆘 ${n} می‌خواهد بعد از کیل‌سوییچ باز شود (رمز بازیابی پشت کامپیوتر زده شد)`, rescueBtn: "🔓 باز کردن قفل (اثر انگشت)",
     inc: "تغییر روی کامپیوتر - صفحه قفل شد", approve: "✅ تأیید (اثر انگشت)", deny: "⛔ رد", killIn: "بی‌جواب = کیل‌سوییچ",
     gate: "🧱 خود کامپیوتر تأیید می‌کند",
+    bellOff: "🔕 هشدار خاموش", bellOn: "🔔 هشدار روشن", pushAsk: "با روشن کردن هشدار، تغییرهای مشکوک حتی با اپ بسته روی گوشی صدا می‌دهند.\n\nصدا همان صدای اعلان گوشی است، پس اگر گوشی بی‌صدا باشد فقط پیام می‌آید.",
+    pushOn: "روشن کن", pushOnNow: "هشدار روی این گوشی روشن است.", pushTest: "ارسال تست", pushOff: "خاموش کن", pushSent: "فرستاده شد. چند ثانیه‌ی دیگر باید زنگ بزند.", pushFail: "سرور نتوانست بفرستد، دوباره امتحان کن.",
+    pushNo: "این مرورگر اعلان ندارد. روی آیفون: اول Share و بعد Add to Home Screen را بزن، اپ را از همان آیکون باز کن و دوباره زنگوله را بزن.", pushDenied: "اعلان این سایت در تنظیمات مرورگر بسته است. آن را باز کن و دوباره امتحان کن.",
     vNormal: "✅ شبیه نصب عادی برنامه", vCheck: "🚨 مشکوک، با دقت نگاه کن", ifNot: "کار خودت بود؟ تأیید کن. اگر نبود، رد کن (حتی با امضای معتبر).",
     noDeadline: "مهلت ندارد، تا جواب بدهی همین‌جا می‌ماند", fFile: "فایل", fSigner: "امضا", fAccount: "اجرا با", fArgs: "آرگومان", noSign: "بدون امضای معتبر",
     why: {no_file: "فایلش پیدا نشد", unsigned: "امضا ندارد", bad_signature: "امضا نامعتبر یا دستکاری شده", odd_folder: "بیرون از پوشه‌ی برنامه‌ها", runner: "اجراکننده‌ی دستور است (امضای مایکروسافت چیزی را ثابت نمی‌کند)"},
@@ -35,6 +38,9 @@ const T = {
     rescue: n => `🆘 ${n} asks to unlock after the kill switch (recovery password typed at the PC)`, rescueBtn: "🔓 Unlock (fingerprint)",
     inc: "Change on the PC - screen locked", approve: "✅ Approve (fingerprint)", deny: "⛔ Deny", killIn: "no answer = kill switch",
     gate: "🧱 the PC approves itself",
+    bellOff: "🔕 Alerts off", bellOn: "🔔 Alerts on", pushAsk: "With alerts on, suspicious changes sound on this phone even when the app is closed.\n\nIt uses the phone's notification sound, so a silenced phone only shows the message.",
+    pushOn: "Turn on", pushOnNow: "Alerts are on for this phone.", pushTest: "Send a test", pushOff: "Turn off", pushSent: "Sent. It should ring in a few seconds.", pushFail: "The server could not send it, try again.",
+    pushNo: "This browser has no notifications. On iPhone: Share, then Add to Home Screen, open the app from that icon and tap the bell again.", pushDenied: "Notifications for this site are blocked in the browser settings. Allow them and try again.",
     vNormal: "✅ Looks like a normal install", vCheck: "🚨 Suspicious, look closely", ifNot: "Was it you? Approve. If not, deny (even with a valid signature).",
     noDeadline: "no deadline, it waits here until you answer", fFile: "File", fSigner: "Signed by", fAccount: "Runs as", fArgs: "Arguments", noSign: "no valid signature",
     why: {no_file: "file not found", unsigned: "not signed", bad_signature: "bad or tampered signature", odd_folder: "outside the program folders", runner: "runs other commands (a Microsoft signature proves nothing here)"},
@@ -50,7 +56,8 @@ const T = {
 let L = "fa";
 try { L = localStorage.getItem("lang") || (navigator.language.startsWith("fa") ? "fa" : "en"); } catch (e) {}
 const $ = id => document.getElementById(id);
-let state = null, timer = null, installEvt = null;
+let state = null, timer = null, installEvt = null, pushSynced = false, audio = null, alertsSeen = null;
+const swReg = "serviceWorker" in navigator ? navigator.serviceWorker.register("/sw.js").catch(() => null) : Promise.resolve(null);
 const notes = {};          // machine index -> last result text
 
 // ---------- helpers ----------
@@ -106,10 +113,11 @@ function paintStatic() {
   document.documentElement.lang = L; document.documentElement.dir = L === "fa" ? "rtl" : "ltr";
   document.querySelectorAll("[data-t]").forEach(e => e.textContent = t[e.dataset.t]);
   $("lang").textContent = t.lang; $("install").textContent = t.install; $("logout").textContent = t.logout;
+  paintBell();
 }
 
 function showLogin() {
-  state = null; clearInterval(timer); timer = null;
+  state = null; clearInterval(timer); timer = null; paintBell();
   $("app").classList.add("hide"); $("logout").classList.add("hide"); $("who").textContent = "";
   $("login").classList.remove("hide");
 }
@@ -185,8 +193,81 @@ async function refresh() {
   try {
     state = await api("/api/state");
     render();
+    ringOnNew();
+    if (!pushSynced) { pushSynced = true; syncPush(); }
     if (!timer) timer = setInterval(() => { if (!document.hidden) refresh(); }, 5000);
   } catch (e) { /* 401 already showed the login */ }
+}
+
+// ---------- alerts on the phone ----------
+const pushOK = () => "PushManager" in window && "Notification" in window && "serviceWorker" in navigator;
+async function pushSub() {
+  if (!pushOK() || !await swReg) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function paintBell() {
+  const bell = $("bell");
+  if (!state || !state.admin) { bell.classList.add("hide"); return; }
+  let on = false;
+  try { on = !!await pushSub() && Notification.permission === "granted"; } catch (e) {}
+  bell.textContent = on ? T[L].bellOn : T[L].bellOff;
+  bell.classList.remove("hide");
+}
+// browsers renew a subscription now and then: keep the server's copy (and the language) current
+async function syncPush() {
+  try {
+    const sub = await pushSub();
+    if (sub && Notification.permission === "granted") await api("/api/push/sub", {sub: sub.toJSON(), lang: L});
+  } catch (e) {}
+  paintBell();
+}
+async function bellClick() {
+  const t = T[L];
+  if (!pushOK()) return modal(t.pushNo, [[t.ok, true, "pri"]]);
+  try {
+    const sub = await pushSub();
+    if (sub && Notification.permission === "granted") {
+      const a = await modal(t.pushOnNow, [[t.pushOff, "off"], [t.pushTest, "test", "pri"]]);
+      if (a === "test") {
+        const r = await api("/api/push/test", {});
+        toast(r.ok ? t.pushSent : t.pushFail, !r.ok);
+      } else if (a === "off") {
+        await api("/api/push/off", {endpoint: sub.endpoint});
+        await sub.unsubscribe();
+      }
+    } else {
+      if (!await modal(t.pushAsk, [[t.no, false], [t.pushOn, true, "pri"]])) return;
+      if (await Notification.requestPermission() !== "granted") return modal(t.pushDenied, [[t.ok, true, "pri"]]);
+      await swReg;
+      const reg = await navigator.serviceWorker.ready;
+      const s = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: dec(state.push_key)});
+      await api("/api/push/sub", {sub: s.toJSON(), lang: L});
+      const r = await api("/api/push/test", {});
+      toast(r.ok ? t.pushSent : t.pushFail, !r.ok);
+    }
+  } catch (e) { toast(e.message, true); }
+  paintBell();
+}
+// the app is open: a short alarm too (browsers allow sound only after the first tap)
+document.addEventListener("click", () => {
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
+});
+function beep() {
+  if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
+  if (!audio) return;
+  [0, 0.28, 0.56].forEach(at => {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = 880; g.gain.value = 0.2;
+    o.connect(g); g.connect(audio.destination);
+    o.start(audio.currentTime + at); o.stop(audio.currentTime + at + 0.18);
+  });
+}
+function ringOnNew() {
+  const now = new Set((state.rescue || []).map(r => "r" + r.ts));
+  state.machines.forEach(m => (m.incidents || []).forEach(p => now.add(p.id)));
+  if (alertsSeen && [...now].some(x => !alertsSeen.has(x))) beep();
+  alertsSeen = now;
 }
 
 // ---------- actions ----------
@@ -240,7 +321,8 @@ async function claudeWatch(i) {  // Claude prints its link a few seconds after i
 
 // ---------- wiring ----------
 $("fp").onclick = login;
-$("lang").onclick = () => { L = L === "fa" ? "en" : "fa"; try { localStorage.setItem("lang", L); } catch (e) {} paintStatic(); if (state) render(); };
+$("lang").onclick = () => { L = L === "fa" ? "en" : "fa"; try { localStorage.setItem("lang", L); } catch (e) {} paintStatic(); if (state) { render(); syncPush(); } };
+$("bell").onclick = bellClick;
 $("logout").onclick = async () => { try { await api("/api/logout", {}); } catch (e) {} showLogin(); };
 $("pair").onclick = e => press("p", undefined, undefined, e.target);
 $("kill").onclick = e => press("x", undefined, undefined, e.target);
@@ -253,7 +335,6 @@ $("machines").onclick = e => {
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state) refresh(); });
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; $("install").classList.remove("hide"); });
 $("install").onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("install").classList.add("hide"); };
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
 paintStatic();
 refresh();

@@ -151,3 +151,18 @@ func TestDeskTextFits(t *testing.T) {
 		t.Fatalf("too long for msg.exe: %d", n)
 	}
 }
+
+// the Wi-Fi service left the snapshot: an approved list that still has it must not raise an alarm...
+func TestFlappingServiceLeftBase(t *testing.T) {
+	state := tickState(t)
+	withWatch(func(w *Watch) { w.Base["services"] = []string{"PIEServiceNew", "a"} })
+	watchTick(map[string][]string{"services": {"a"}})
+	if w := state(); len(w.Inc) != 0 {
+		t.Fatalf("false alarm: %+v", w.Inc)
+	}
+	// ...but a service of that name that is not the real one (the snapshot keeps it) still does
+	watchTick(map[string][]string{"services": {"PIEServiceNew", "a"}})
+	if w := state(); len(w.Inc) != 1 || !strings.Contains(w.Inc[0].Detail, "PIEServiceNew") {
+		t.Fatalf("fake service missed: %+v", w.Inc)
+	}
+}

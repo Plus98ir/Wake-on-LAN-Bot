@@ -5,7 +5,12 @@ $o = [ordered]@{}
 try { $o.admins = @(Get-LocalGroupMember -SID S-1-5-32-544 | ForEach-Object { "$($_.Name)" }) } catch {}
 try { $o.users = @(Get-LocalUser | Where-Object Enabled | ForEach-Object { "$($_.Name)" }) } catch {}
 # per-user services get a new random suffix at every logon: drop it
-try { $o.services = @(Get-Service | ForEach-Object { $_.Name -replace '_[0-9a-f]{4,}$', '' } | Sort-Object -Unique) } catch {}
+# Intel's Wi-Fi service comes and goes with its network card (every kill switch turned that into a false
+# alarm). Skipped only when it is the real driver's file: something else with that name is still reported.
+try {
+  $flap = @(Get-CimInstance Win32_Service -Filter "Name='PIEServiceNew'" | Where-Object { $_.PathName -match '^"?[a-z]:\\windows\\system32\\driverstore\\filerepository\\[^\\]+\\intel_pie_service\.exe"?$' } | ForEach-Object { $_.Name })
+  $o.services = @(Get-Service | Where-Object { $flap -notcontains $_.Name } | ForEach-Object { $_.Name -replace '_[0-9a-f]{4,}$', '' } | Sort-Object -Unique)
+} catch {}
 try { $o.tasks = @(Get-ScheduledTask | Where-Object { $_.TaskPath -notlike '\Microsoft\*' -and $_.TaskPath -ne '\WOL\' } | ForEach-Object { "$($_.TaskPath)$($_.TaskName)" }) } catch {}
 try { $o.firewall = @(Get-NetFirewallProfile | ForEach-Object { "$($_.Name) $($_.Enabled) $($_.DefaultInboundAction) $($_.AllowInboundRules)" }) } catch {}
 try {
