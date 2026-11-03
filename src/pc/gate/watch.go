@@ -3,7 +3,8 @@ package main
 // Watchdog (`wol-gate watch`, task WOL\Watch as SYSTEM): every 15 s it compares a snapshot of what
 // decides who can get into this PC with the approved one. A change locks the screen and waits for
 // the owner: approve = a passkey signature over that incident, checked here (act "approve");
-// deny (act "deny") or no answer to a dangerous change within 3 min = kill switch.
+// deny (act "deny") or no answer to a dangerous change within 90 s = kill switch. A lock-only change
+// (service, task) locks once and waits in the app, with no deadline, until the owner answers or undoes it.
 
 import (
 	"crypto/rand"
@@ -43,7 +44,11 @@ type Incident struct {
 	Kind   string `json:"kind"`
 	Detail string `json:"detail"`
 	TS     int64  `json:"ts"`
-	Status string `json:"status"` // pending | approved | denied | timeout
+	Status string `json:"status"` // pending | approved | denied | timeout | reverted | superseded
+	// Items: what the new thing is (file, signature), shown to the owner. Snap: the state that was shown,
+	// and the only one an approval accepts: whatever appears after it needs its own incident.
+	Items []ChangeItem `json:"items,omitempty"`
+	Snap  []string     `json:"snap,omitempty"`
 }
 
 type Watch struct {
@@ -128,6 +133,27 @@ func diff(old, now []string) string {
 	return fmt.Sprintf("added %v removed %v", add, del)
 }
 
+func addedTo(old, now []string) []string {
+	in := map[string]bool{}
+	for _, x := range old {
+		in[x] = true
+	}
+	var add []string
+	for _, x := range now {
+		if !in[x] {
+			add = append(add, x)
+		}
+	}
+	return add
+}
+
+func lockScreen() {
+	if os.Getenv("WOLGATE_DIR") != "" { // tests must not lock the real PC
+		return
+	}
+	run("schtasks", "/run", "/tn", `WOL\Lock`)
+}
+
 func newID() string {
 	b := make([]byte, 6)
 	rand.Read(b)
@@ -140,7 +166,16 @@ func watchOnce() {
 		logf("WATCH: %v", err)
 		return
 	}
+	watchTick(snap)
+}
+
+func watchTick(snap map[string][]string) {
 	var toKill string
+	type fresh struct {
+		id, kind string
+		added    []string
+	}
+	var news []fresh
 	type neut struct {
 		kind      string
 		base, cur []string
@@ -155,9 +190,11 @@ func watchOnce() {
 			return
 		}
 		pending := map[string]bool{}
+		shown := map[string]string{} // kind -> what its pending incident told the owner
 		for _, in := range w.Inc {
 			if in.Status == "pending" {
 				pending[in.Kind] = true
+				shown[in.Kind] = in.Detail
 			}
 		}
 		for kind, cur := range snap {
@@ -171,19 +208,27 @@ func watchOnce() {
 				for _, x := range old {
 					in[x] = true
 				}
-				var fresh []string
+				var failed []string
 				for _, x := range cur {
 					if !in[x] {
-						fresh = append(fresh, x)
+						failed = append(failed, x)
 					}
 				}
 				w.Base[kind] = cur
-				if len(fresh) == 0 || pending[kind] {
+				if len(failed) == 0 || pending[kind] {
 					continue
 				}
-				w.Inc = append(w.Inc, Incident{ID: newID(), Kind: kind, Detail: fmt.Sprintf("%d failed Windows logon(s)", len(fresh)), TS: now, Status: "pending"})
-			} else if same := strings.Join(old, "\n") == strings.Join(cur, "\n"); !same && !pending[kind] {
-				w.Inc = append(w.Inc, Incident{ID: newID(), Kind: kind, Detail: diff(old, cur), TS: now, Status: "pending"})
+				w.Inc = append(w.Inc, Incident{ID: newID(), Kind: kind, Detail: fmt.Sprintf("%d failed Windows logon(s)", len(failed)), TS: now, Status: "pending"})
+			} else if same := strings.Join(old, "\n") == strings.Join(cur, "\n"); !same && (!pending[kind] || (!dangerous[kind] && shown[kind] != diff(old, cur))) {
+				// A lock-only incident can wait for hours, so something new must not hide behind it:
+				// the state moved on from what the owner was shown -> a new incident replaces the old one.
+				for i := range w.Inc {
+					if w.Inc[i].Kind == kind && w.Inc[i].Status == "pending" {
+						w.Inc[i].Status = "superseded"
+						logf("WATCH SUPERSEDED %s %s (it changed again)", w.Inc[i].ID, kind)
+					}
+				}
+				w.Inc = append(w.Inc, Incident{ID: newID(), Kind: kind, Detail: diff(old, cur), TS: now, Status: "pending", Snap: cur})
 			} else {
 				// a dangerous kind returning to base does NOT clear its incident (an attacker must not
 				// dodge the kill by undoing fast, and our own neutralize must not look like approval):
@@ -200,17 +245,15 @@ func watchOnce() {
 			}
 			in := w.Inc[len(w.Inc)-1]
 			logf("WATCH INCIDENT %s %s: %s", in.ID, kind, in.Detail)
-			run("schtasks", "/run", "/tn", `WOL\Lock`)
+			lockScreen()
+			news = append(news, fresh{in.ID, kind, addedTo(old, cur)})
 			if neutralizable[kind] {
 				toNeut = append(toNeut, neut{kind, append([]string{}, old...), append([]string{}, cur...)})
-				tellDesk(fmt.Sprintf("change detected (%s) - door shut + screen locked. Approve it in the app, or the PC locks down fully.", kind))
-			} else {
-				tellDesk(fmt.Sprintf("change detected (%s) - screen locked. Approve it with your fingerprint in the app.", kind))
 			}
 		}
 		for i := range w.Inc {
 			in := &w.Inc[i]
-			if in.Status == "pending" && now-in.TS > answerWithin {
+			if in.Status == "pending" && dangerous[in.Kind] && now-in.TS > answerWithin {
 				in.Status = "timeout"
 				logf("WATCH TIMEOUT %s %s", in.ID, in.Kind)
 				if dangerous[in.Kind] {
@@ -222,6 +265,23 @@ func watchOnce() {
 			w.Inc = w.Inc[len(w.Inc)-100:]
 		}
 	})
+	// look before neutralize: it kills a remote tool, and with it the path we want to report
+	for _, f := range news {
+		items := explain(f.kind, f.added)
+		if items != nil {
+			withWatch(func(w *Watch) {
+				for i := range w.Inc {
+					if w.Inc[i].ID == f.id {
+						w.Inc[i].Items = items
+					}
+				}
+			})
+			for _, it := range items {
+				logf("WATCH WHAT %s: %s | %s | %s %s | %s %v", f.id, it.Name, it.Path, it.Sig, it.Signer, it.Verdict, it.Why)
+			}
+		}
+		tellDesk(deskText(f.kind, items))
+	}
 	for _, n := range toNeut {
 		neutralize(n.kind, n.base, n.cur)
 	}
@@ -257,13 +317,15 @@ func watchLoop() {
 
 // ----- gate actions for the server / app -----
 
-// pending incidents without details (details stay in gate.log on this PC)
+// pending incidents for the app: what changed, so the owner can decide (the full log stays in gate.log)
 func incidents() string {
 	type out struct {
-		ID   string `json:"id"`
-		Kind string `json:"kind"`
-		TS   int64  `json:"ts"`
-		Kill bool   `json:"kill"`
+		ID     string       `json:"id"`
+		Kind   string       `json:"kind"`
+		TS     int64        `json:"ts"`
+		Kill   bool         `json:"kill"`
+		Detail string       `json:"detail,omitempty"`
+		Items  []ChangeItem `json:"items,omitempty"`
 	}
 	res := struct {
 		Alive   int64 `json:"alive"`
@@ -274,14 +336,16 @@ func incidents() string {
 	res.Alive = w.Alive
 	for _, in := range w.Inc {
 		if in.Status == "pending" {
-			res.Pending = append(res.Pending, out{in.ID, in.Kind, in.TS, dangerous[in.Kind]})
+			res.Pending = append(res.Pending, out{in.ID, in.Kind, in.TS, dangerous[in.Kind], clean(in.Detail, 300), in.Items})
 		}
 	}
 	b, _ := json.Marshal(res)
 	return string(b)
 }
 
-// approve (signature already checked): the current state of that kind becomes the approved one
+// approve (signature already checked): the state the owner was shown becomes the approved one. Anything
+// newer is not covered and opens its own incident on the next tick. A neutralized kind was already put
+// back, so there the current state is what gets approved.
 func approve(id string) (string, error) {
 	snap, err := snapshot()
 	if err != nil {
@@ -294,7 +358,11 @@ func approve(id string) (string, error) {
 			if in.ID == id && in.Status == "pending" {
 				in.Status = "approved"
 				if in.Kind != "failed" {
-					w.Base[in.Kind] = snap[in.Kind]
+					if in.Snap != nil && !neutralizable[in.Kind] {
+						w.Base[in.Kind] = in.Snap
+					} else {
+						w.Base[in.Kind] = snap[in.Kind]
+					}
 				}
 				msg = "approved: " + in.Kind
 				logf("WATCH APPROVED %s %s", in.ID, in.Kind)

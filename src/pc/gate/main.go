@@ -524,6 +524,19 @@ func main() {
 		}
 		b, _ := json.MarshalIndent(s, "", "  ")
 		os.Stdout.Write(b)
+	case "explain": // what the watchdog would report about something: wol-gate explain services "Name"
+		if len(os.Args) < 4 {
+			fmt.Println("wol-gate explain <services|tasks|remote> <name>...")
+			os.Exit(2)
+		}
+		items, err := explainRun(os.Args[2], os.Args[3:])
+		if err != nil {
+			fmt.Println("error:", err)
+			os.Exit(1)
+		}
+		b, _ := json.MarshalIndent(items, "", "  ")
+		os.Stdout.Write(b)
+		fmt.Println("\n" + deskText(os.Args[2], items))
 	case "trust":
 		if len(os.Args) < 3 {
 			fmt.Println("wol-gate trust <https://auth-site> [--yes name,name | --all]")

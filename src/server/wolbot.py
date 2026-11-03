@@ -881,6 +881,15 @@ def relay_poll(cfg, qs):
         time.sleep(1)
 
 
+def incident_text(name, p):
+    what = "; ".join(f"{it.get('name')} [{'looks normal' if it.get('verdict') == 'normal' else 'CHECK: ' + ', '.join(it.get('why') or [])}, "
+                     f"{it.get('signer') or 'no valid signature'}, {it.get('path') or 'no file'}]" for it in p.get("items") or [])
+    head = f"⚠️ {name}: change detected ({p['kind']})" + (f": {what}" if what else "")
+    if p.get("kill"):
+        return head + " - door shut + screen locked. Approve with your fingerprint or deny in the app (no answer in 90 s = full network lockdown)."
+    return head + " - screen locked. If it was you, approve with your fingerprint in the app; if not, deny."
+
+
 def incident_watch():
     """Ask every gated PC's watchdog for changes waiting for the owner; alert on new ones."""
     told = set()
@@ -903,9 +912,7 @@ def incident_watch():
                 for p in st.get("pending", []):
                     if p["id"] not in told:
                         told.add(p["id"])
-                        notify(API, cfg, f"⚠️ {m['name']}: change detected ({p['kind']}) - door shut + screen locked. "
-                                         "Approve with your fingerprint or deny in the app"
-                                         + (" (no answer in 90 s = full network lockdown)." if p.get("kill") else "."))
+                        notify(API, cfg, incident_text(m["name"], p))
                 key = "dead:" + m["name"]
                 if time.time() - st.get("alive", 0) > 120 and key not in told:
                     told.add(key)

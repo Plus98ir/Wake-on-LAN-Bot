@@ -13,6 +13,9 @@ const T = {
     rescue: n => `🆘 ${n} می‌خواهد بعد از کیل‌سوییچ باز شود (رمز بازیابی پشت کامپیوتر زده شد)`, rescueBtn: "🔓 باز کردن قفل (اثر انگشت)",
     inc: "تغییر روی کامپیوتر - صفحه قفل شد", approve: "✅ تأیید (اثر انگشت)", deny: "⛔ رد", killIn: "بی‌جواب = کیل‌سوییچ",
     gate: "🧱 خود کامپیوتر تأیید می‌کند",
+    vNormal: "✅ شبیه نصب عادی برنامه", vCheck: "🚨 مشکوک، با دقت نگاه کن", ifNot: "کار خودت بود؟ تأیید کن. اگر نبود، رد کن (حتی با امضای معتبر).",
+    noDeadline: "مهلت ندارد، تا جواب بدهی همین‌جا می‌ماند", fFile: "فایل", fSigner: "امضا", fAccount: "اجرا با", fArgs: "آرگومان", noSign: "بدون امضای معتبر",
+    why: {no_file: "فایلش پیدا نشد", unsigned: "امضا ندارد", bad_signature: "امضا نامعتبر یا دستکاری شده", odd_folder: "بیرون از پوشه‌ی برنامه‌ها", runner: "اجراکننده‌ی دستور است (امضای مایکروسافت چیزی را ثابت نمی‌کند)"},
     kinds: {admins: "ادمین‌ها تغییر کردند", users: "کاربر جدید یا تغییر کاربر", firewall: "فایروال تغییر کرد", uac: "UAC تغییر کرد",
             rdp: "ریموت دسکتاپ تغییر کرد", keys: "کلیدهای SSH یا تنظیمات sshd تغییر کرد", trusted: "Passkeyهای مورد اعتماد تغییر کرد",
             remote: "یک ابزار ریموت اجرا شد", failed: "تلاش ناموفق ورود به ویندوز", services: "سرویس جدید یا حذف‌شده", tasks: "تسک زمان‌بندی‌شده‌ی جدید"},
@@ -32,6 +35,9 @@ const T = {
     rescue: n => `🆘 ${n} asks to unlock after the kill switch (recovery password typed at the PC)`, rescueBtn: "🔓 Unlock (fingerprint)",
     inc: "Change on the PC - screen locked", approve: "✅ Approve (fingerprint)", deny: "⛔ Deny", killIn: "no answer = kill switch",
     gate: "🧱 the PC approves itself",
+    vNormal: "✅ Looks like a normal install", vCheck: "🚨 Suspicious, look closely", ifNot: "Was it you? Approve. If not, deny (even with a valid signature).",
+    noDeadline: "no deadline, it waits here until you answer", fFile: "File", fSigner: "Signed by", fAccount: "Runs as", fArgs: "Arguments", noSign: "no valid signature",
+    why: {no_file: "file not found", unsigned: "not signed", bad_signature: "bad or tampered signature", odd_folder: "outside the program folders", runner: "runs other commands (a Microsoft signature proves nothing here)"},
     kinds: {admins: "Administrators changed", users: "New or changed user", firewall: "Firewall changed", uac: "UAC changed",
             rdp: "Remote Desktop changed", keys: "SSH keys or sshd settings changed", trusted: "Trusted passkeys changed",
             remote: "A remote-control tool is running", failed: "Failed Windows logon", services: "Service added or removed", tasks: "New scheduled task"},
@@ -141,10 +147,23 @@ function render() {
     }
     const rest = order.filter(o => o !== "w");
     rest.forEach((o, k) => kb += b(o, t.b[o], rest.length % 2 && k === rest.length - 1 ? "wide" : ""));
+    const incWhat = p => {
+      const items = p.items || [];
+      if (!items.length) return p.detail ? `<div class="what"><code dir="ltr">${esc(p.detail)}</code></div><small>${esc(t.ifNot)}</small>` : "";
+      return items.map(it => `<div class="what ${it.verdict === "normal" ? "good" : "bad"}"><b>${esc(it.verdict === "normal" ? t.vNormal : t.vCheck)}</b>
+        <div class="nm" dir="ltr">${esc(it.name)}</div>
+        ${(it.why || []).map(w => `<div>• ${esc(t.why[w] || w)}</div>`).join("")}
+        <div>${esc(t.fSigner)}: <span dir="ltr">${esc(it.signer || t.noSign)}</span></div>
+        ${it.path ? `<div>${esc(t.fFile)}: <code dir="ltr">${esc(it.path)}</code></div>` : ""}
+        ${it.args ? `<div>${esc(t.fArgs)}: <code dir="ltr">${esc(it.args)}</code></div>` : ""}
+        ${it.account ? `<div>${esc(t.fAccount)}: <span dir="ltr">${esc(it.account)}</span></div>` : ""}
+      </div>`).join("") + `<small>${esc(t.ifNot)}</small>`;
+    };
     let inc = "";
     (m.incidents || []).forEach((p, j) => {
       inc += `<div class="inc"><b>⚠️ ${esc(t.kinds[p.kind] || p.kind)}</b>
-        <small>${esc(t.inc)} · ${new Date(p.ts * 1000).toLocaleTimeString(L === "fa" ? "fa-IR" : "en-GB")}${p.kill ? " · " + esc(t.killIn) : ""}</small>
+        <small>${esc(t.inc)} · ${new Date(p.ts * 1000).toLocaleTimeString(L === "fa" ? "fa-IR" : "en-GB")}${" · " + esc(p.kill ? t.killIn : t.noDeadline)}</small>
+        ${incWhat(p)}
         <div class="kb"><button data-op="ap" data-i="${m.i}" data-j="${j}">${esc(t.approve)}</button>
         <button data-op="dn" data-i="${m.i}" data-j="${j}">${esc(t.deny)}</button></div></div>`;
     });
