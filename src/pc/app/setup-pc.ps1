@@ -154,6 +154,115 @@ function Lock-Acl($path) {
   icacls $path /setowner "*S-1-5-18" | Out-Null
 }
 
+# Modem port forward for wake from outside, by UPnP (no router login needed): UDP 9 + TCP 9 -> this PC.
+# Written to wol-modem.ps1; task WOL\Modem (SYSTEM) re-runs it at startup and every hour, so a new
+# LAN IP (DHCP) or a modem reboot is fixed by itself. modem.json = last result; modem-ip.txt = the
+# modem's public IP (wol-gate "ip" prefers it: a VPN on the PC would show the VPN's IP instead).
+$ModemScript = @'
+param([switch]$Quiet, [switch]$Remove, [string]$Gateway)
+$ErrorActionPreference = "Stop"
+$Agent = "C:\ProgramData\wol-agent"
+function Http($url, $body, $soap) {
+  $r = [Net.HttpWebRequest]::Create($url)
+  $r.Proxy = $null; $r.Timeout = 4000; $r.ReadWriteTimeout = 4000
+  if ($body) {
+    $r.Method = "POST"; $r.ContentType = 'text/xml; charset="utf-8"'; $r.Headers.Add("SOAPAction", $soap)
+    $b = [Text.Encoding]::UTF8.GetBytes($body); $r.ContentLength = $b.Length
+    $st = $r.GetRequestStream(); $st.Write($b, 0, $b.Length); $st.Close()
+  }
+  try { $resp = $r.GetResponse() } catch [Net.WebException] { $resp = $_.Exception.Response; if (-not $resp) { throw } }
+  $t = (New-Object IO.StreamReader $resp.GetResponseStream()).ReadToEnd(); $resp.Close(); $t
+}
+function Soap($svc, $act, $a) {
+  $x = ($a.GetEnumerator() | ForEach-Object { "<$($_.Key)>$($_.Value)</$($_.Key)>" }) -join ""
+  $t = Http $svc.url ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>' +
+    "<u:$act xmlns:u=`"$($svc.type)`">$x</u:$act></s:Body></s:Envelope>") "`"$($svc.type)#$act`""
+  if ($t -match '<errorCode>\s*(\d+)') { throw "UPnP error $($Matches[1])" }
+  $t
+}
+function Test-Public($ip) {
+  $ip -match '^\d+\.\d+\.\d+\.\d+$' -and $ip -notmatch '^(0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)'
+}
+$res = [ordered]@{ ts = [int][double]::Parse((Get-Date -UFormat %s)); ok = $false; external = ""; public = $false; local = ""; gateway = ""; port = 0; udp = $false; tcp = $false; error = "" }
+try {
+  # the wired card, not a VPN/TUN adapter that may hold the default route
+  $nic = Get-NetAdapter -Physical | Where-Object { $_.Status -eq "Up" -and $_.MediaType -eq "802.3" } | Select-Object -First 1
+  if (-not $nic) { throw "no wired network card is up" }
+  $res.local = (Get-NetIPAddress -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "169.254.*" } | Select-Object -First 1).IPAddress
+  $res.gateway = if ($Gateway) { $Gateway } else { (Get-NetRoute -InterfaceIndex $nic.ifIndex -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1).NextHop }
+  if (-not $res.local -or -not $res.gateway) { throw "the network card has no IP / gateway" }
+  $locs = @()
+  try {
+    $u = New-Object Net.Sockets.UdpClient (New-Object Net.IPEndPoint ([Net.IPAddress]::Parse($res.local)), 0)
+    $u.Client.ReceiveTimeout = 1000
+    foreach ($st in "urn:schemas-upnp-org:device:InternetGatewayDevice:1", "urn:schemas-upnp-org:device:InternetGatewayDevice:2", "upnp:rootdevice") {
+      $m = [Text.Encoding]::ASCII.GetBytes("M-SEARCH * HTTP/1.1`r`nHOST: 239.255.255.250:1900`r`nMAN: `"ssdp:discover`"`r`nMX: 2`r`nST: $st`r`n`r`n")
+      [void]$u.Send($m, $m.Length, "239.255.255.250", 1900)
+      [void]$u.Send($m, $m.Length, $res.gateway, 1900)   # some modems answer only unicast
+    }
+    $ep = New-Object Net.IPEndPoint ([Net.IPAddress]::Any), 0
+    $end = (Get-Date).AddSeconds(3)
+    while ((Get-Date) -lt $end) {
+      try { $r = [Text.Encoding]::ASCII.GetString($u.Receive([ref]$ep)) } catch { continue }
+      if ($r -match '(?im)^LOCATION:\s*(\S+)') { $locs += $Matches[1] }
+    }
+    $u.Close()
+  } catch {}
+  # the firewall may eat the SSDP answers: also try the description URLs common modems use
+  $locs = @($locs | Select-Object -Unique) + @("1900/igd.xml", "1900/gatedesc.xml", "1900/rootDesc.xml", "1900/IGD.xml", "5431/dyndev/uuid", "52869/picsdesc.xml",
+    "49152/IGDdevicedesc.xml", "49152/description.xml", "37215/upnpdev.xml", "5000/rootDesc.xml", "80/igd.xml" | ForEach-Object { "http://$($res.gateway):$_" })
+  $svc = $null
+  foreach ($loc in $locs) {
+    try { $d = Http $loc } catch { continue }
+    $base = if ($d -match '<URLBase>\s*([^<\s]+)') { $Matches[1] } else { $loc }
+    foreach ($m in [regex]::Matches($d, '(?s)<service>.*?</service>')) {
+      if ($m.Value -notmatch '<serviceType>\s*(urn:schemas-upnp-org:service:WAN(IP|PPP)Connection:\d)') { continue }
+      $type = $Matches[1]
+      if ($m.Value -notmatch '<controlURL>\s*([^<\s]+)') { continue }
+      $cand = @{ type = $type; url = ([Uri]::new([Uri]$base, $Matches[1])).AbsoluteUri }
+      try { $ext = if ((Soap $cand "GetExternalIPAddress" @{}) -match '<NewExternalIPAddress>\s*([\d.]+)') { $Matches[1] } else { "" } } catch { continue }
+      if ($ext -and $ext -ne "0.0.0.0") { $svc = $cand; $res.external = $ext; break }
+      if (-not $svc) { $svc = $cand }
+    }
+    if ($svc -and $res.external) { break }
+  }
+  if (-not $svc) { throw "no UPnP on the modem: turn UPnP on in the modem, or forward UDP 9 + TCP 9 to $($res.local) by hand" }
+  $res.public = Test-Public $res.external
+  if ($Remove) {
+    foreach ($port in 9, 47009) { foreach ($proto in "UDP", "TCP") {
+      try { Soap $svc "DeletePortMapping" ([ordered]@{ NewRemoteHost = ""; NewExternalPort = $port; NewProtocol = $proto }) | Out-Null } catch {}
+    } }
+    Remove-Item "$Agent\modem.json", "$Agent\modem-ip.txt" -ErrorAction SilentlyContinue
+    "removed"; exit 0
+  }
+  # port 9 first; many modems (miniupnpd) allow UPnP only above 1024 - the NIC does not care which port
+  foreach ($port in 9, 47009) {
+    $errs = @()
+    foreach ($proto in "UDP", "TCP") {
+      $a = [ordered]@{ NewRemoteHost = ""; NewExternalPort = $port; NewProtocol = $proto; NewInternalPort = $port; NewInternalClient = $res.local
+                       NewEnabled = 1; NewPortMappingDescription = "WOL"; NewLeaseDuration = 0 }
+      $done = $false
+      foreach ($try in 1..3) {
+        try { Soap $svc "AddPortMapping" $a | Out-Null; $done = $true; break }
+        catch {
+          if ("$_" -match "718") { try { Soap $svc "DeletePortMapping" ([ordered]@{ NewRemoteHost = ""; NewExternalPort = $port; NewProtocol = $proto }) | Out-Null } catch {} }
+          elseif ("$_" -match "725") { $a.NewLeaseDuration = 604800 }   # only leases allowed: a week, renewed every hour
+          else { $errs += "$proto $port : $_"; break }
+        }
+      }
+      $res[$proto.ToLower()] = $done
+    }
+    $res.error = $errs -join "; "
+    if ($res.udp -or $res.tcp) { $res.port = $port; break }
+  }
+  $res.ok = $res.udp -or $res.tcp
+} catch { $res.error = "$_" }
+New-Item -ItemType Directory -Force $Agent | Out-Null
+$res | ConvertTo-Json | Set-Content "$Agent\modem.json" -Encoding utf8
+if ($res.public -and $res.port) { Set-Content "$Agent\modem-ip.txt" "$($res.external):$($res.port)" -Encoding ascii -NoNewline } else { Remove-Item "$Agent\modem-ip.txt" -ErrorAction SilentlyContinue }
+if (-not $Quiet) { $res | ConvertTo-Json -Compress }
+'@
+
 $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
 # Interactive tasks: run on the logged-on desktop when the bot calls schtasks /run
 $me = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Highest
@@ -318,7 +427,17 @@ Start-Process -FilePath `$exe -ArgumentList 'remote-control', '--name', '$Name' 
 function Set-Gate($url) {
   if (-not $url) { Write-Host "  no fingerprint site on the server (wolbot auth) - gate skipped" -ForegroundColor Yellow; return }
   if (-not $GateExe -or -not (Test-Path $GateExe)) { Write-Host "  this build has no wol-gate.exe - gate skipped" -ForegroundColor Yellow; return }
-  if ($GateExe -ne "$Agent\wol-gate.exe") { Copy-Item $GateExe "$Agent\wol-gate.exe" -Force }
+  if ($GateExe -ne "$Agent\wol-gate.exe") {
+    # the watchdog runs wol-gate.exe: a running exe cannot be overwritten, but it can be moved aside
+    Stop-ScheduledTask -TaskPath "\WOL\" -TaskName "Watch" -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    try { Copy-Item $GateExe "$Agent\wol-gate.exe" -Force }
+    catch {
+      Remove-Item "$Agent\wol-gate.old" -Force -ErrorAction SilentlyContinue
+      Move-Item "$Agent\wol-gate.exe" "$Agent\wol-gate.old" -Force
+      Copy-Item $GateExe "$Agent\wol-gate.exe" -Force
+    }
+  }
   icacls "$Agent\wol-gate.exe" /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" "*S-1-5-32-545:RX" | Out-Null
   & "$Agent\wol-gate.exe" trust $url --all
   & "$Agent\wol-gate.exe" list | ForEach-Object { Write-Host "  $_" }
@@ -338,7 +457,32 @@ function Set-Gate($url) {
   Write-Host "  gate on: the server can only run signed actions on this PC; watchdog running" -ForegroundColor Green
 }
 
+# writes wol-modem.ps1, task WOL\Modem (SYSTEM: 1 min after startup + every hour), runs it once now
+function Set-Modem {
+  Set-Content -Path "$Agent\wol-modem.ps1" -Value $ModemScript -Encoding utf8
+  Lock-Acl "$Agent\wol-modem.ps1"
+  $act = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Agent\wol-modem.ps1`" -Quiet"
+  $trg = @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 1)))
+  $trg[0].Delay = "PT1M"
+  $sp = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+  Register-ScheduledTask -TaskPath "\WOL\" -TaskName "Modem" -Action $act -Trigger $trg -Principal $sp -Settings $set -Force | Out-Null
+  try { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$Agent\wol-modem.ps1" | ConvertFrom-Json } catch { $null }
+}
+function Show-Modem($Modem) {
+  Write-Host "  Wake from outside (modem):"
+  if (-not $Modem) { Write-Host "    could not check the modem" -ForegroundColor Yellow }
+  elseif ($Modem.ok) {
+    Write-Host "    UPnP forward OK: UDP $(if ($Modem.udp) {'yes'} else {'no'}), TCP $(if ($Modem.tcp) {'yes'} else {'no'}), port $($Modem.port) -> $($Modem.local)  (modem $($Modem.gateway), public IP $($Modem.external))" -ForegroundColor Green
+    Write-Host "    Tip: reserve $($Modem.local) for this PC in the modem (DHCP reservation / IP-MAC binding): some modems forget a sleeping PC after a while."
+  } else { Write-Host "    $($Modem.error)" -ForegroundColor Yellow }
+  if ($Modem -and $Modem.external -and -not $Modem.public) {
+    Write-Host "    The modem has no public IP ($($Modem.external): 4G/TD-LTE or CGNAT) - a wake from outside cannot reach it." -ForegroundColor Yellow
+    Write-Host "    Use a Relay: press Relay on this PC in the app, and run it on an always-on phone or PC at home." -ForegroundColor Yellow
+  }
+}
+
 if ($Uninstall) {
+  if (Test-Path "$Agent\wol-modem.ps1") { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$Agent\wol-modem.ps1" -Remove | Out-Null }
   Get-ScheduledTask -TaskPath "\WOL\" -ErrorAction SilentlyContinue | ForEach-Object { Stop-ScheduledTask -InputObject $_ -ErrorAction SilentlyContinue; $_ } | Unregister-ScheduledTask -Confirm:$false
   Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" | Where-Object { $_.CommandLine -match "wol-agent" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
   Remove-Item $Agent -Recurse -Force -ErrorAction SilentlyContinue
@@ -362,6 +506,8 @@ if ($Update) {
     if (-not $GateExe) { $GateExe = "$Agent\wol-gate.exe" }
     Set-Gate $conf.auth_url
   }
+  Write-Host "Modem"
+  Show-Modem (Set-Modem)
   Write-Host ""
   Write-Host "Saved. In the bot press 🔄 Refresh on this PC to see the new buttons." -ForegroundColor Green
   exit 0
@@ -378,6 +524,9 @@ if (-not (Test-Path $Key)) { & ssh-keygen.exe -q -t ed25519 -f $Key -N '""' -C "
 Lock-Acl $Key
 $pub = ((Get-Content "$Key.pub" -Raw).Trim() -split '\s+')[0..1] -join ' '
 
+Write-Host "  modem: wake port forward (UPnP)..."
+$Modem = Set-Modem
+
 if ($PairCode) {
   Write-Host "[3/7] Pairing with the server"
   $c = $PairCode.Trim() -replace '^wol://', ''
@@ -385,6 +534,7 @@ if ($PairCode) {
   $hostPort = $Matches[1]; $code = $Matches[2]
   $AppList = @(Resolve-Apps)
   $body = @{ code = $code; name = $Name; mac = $Mac; os = "windows"; user = $env:USERNAME; tunnel_key = $pub; wake_host = $WakeHost
+             modem_ip = $(if ($Modem -and $Modem.public -and $Modem.port) { $Modem.external } else { "" }); modem_port = $(if ($Modem -and $Modem.port) { $Modem.port } else { 9 })
              gate = [bool]($GateExe -and (Test-Path $GateExe))
              apps = @($AppList | ForEach-Object { @{ name = $_.name; task = $_.task } }) } | ConvertTo-Json -Depth 4
   try {
@@ -466,6 +616,8 @@ Set-NetAdapterPowerManagement -Name $nic.Name -WakeOnMagicPacket Enabled -ErrorA
 # Fast Startup leaves the NIC unarmed on many boards
 powercfg /hibernate off | Out-Null
 Write-Host "  done"
+
+Show-Modem $Modem
 
 Write-Host "[7/7] Start tunnel"
 Stop-ScheduledTask -TaskPath "\WOL\" -TaskName "Tunnel" -ErrorAction SilentlyContinue

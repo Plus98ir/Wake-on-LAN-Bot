@@ -82,6 +82,9 @@ Match User woltun
     AllowAgentForwarding no
     PasswordAuthentication no
     ForceCommand /bin/false
+    # a dead tunnel (home IP changed, modem rebooted) must free its port fast, or the new one is refused
+    ClientAliveInterval 15
+    ClientAliveCountMax 3
 EOF
 if sshd -t; then
   systemctl reload ssh 2>/dev/null || systemctl reload sshd

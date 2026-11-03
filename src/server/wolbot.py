@@ -826,8 +826,15 @@ def pair(cfg, req, client_ip):
         # any modem: magic packet to its public address (needs a port forward of UDP 9 or TCP 9;
         # TCP for networks that drop UDP). "auto": ip_watch follows the home IP while the PC is online
         m["wake"] = []
+        # modem_ip/modem_port: what WOL Agent set by UPnP on the modem (a VPN on the PC can hide the real IP)
+        mip = str(req.get("modem_ip") or "")
+        mip = mip if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", mip) else ""
+        try:
+            mport = min(max(int(req.get("modem_port") or 9), 1), 65535)
+        except (TypeError, ValueError):
+            mport = 9
         for t in ("udp", "tcp"):
-            w = {"type": t, "host": req.get("wake_host") or client_ip, "port": 9}
+            w = {"type": t, "host": req.get("wake_host") or mip or client_ip, "port": mport}
             if not req.get("wake_host"):
                 w["auto"] = True
             m["wake"].append(w)
@@ -922,18 +929,24 @@ def ip_watch():
                     continue
                 if gated(m):
                     rc, out = gate_call(m, {"act": "ip", "arg": str(cfg.get("pair_port", 8790))})
+                elif m.get("os", "windows") == "windows":  # the modem's IP from the UPnP task, else ask the server
+                    f = r"C:\ProgramData\wol-agent\modem-ip.txt"
+                    rc, out = pc_run(m, f'if exist "{f}" (type "{f}") else (curl -s -m 8 {url})')
                 else:
                     rc, out = pc_run(m, f"curl -s -m 8 {url}")
-                ip = out.strip()
-                if rc != 0 or not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
+                hit = re.fullmatch(r"(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?", out.strip())
+                if rc != 0 or not hit:
                     continue
+                ip, port = hit[1], int(hit[2]) if hit[2] else None
                 cfg = load()  # re-read: the bot may have saved meanwhile
                 mm = next((x for x in cfg["machines"] if x["name"] == m["name"]), {})
                 changed = False
                 for w in mm.get("wake", []):
-                    if w["type"] in ("udp", "tcp") and w.get("auto") and w["host"] != ip:
-                        print(f"{mm['name']}: home IP {w['host']} -> {ip}", flush=True)
+                    if w["type"] in ("udp", "tcp") and w.get("auto") and (w["host"] != ip or (port and w.get("port") != port)):
+                        print(f"{mm['name']}: home {w['type']} {w['host']}:{w.get('port')} -> {ip}:{port or w.get('port')}", flush=True)
                         w["host"], changed = ip, True
+                        if port:
+                            w["port"] = port
                 if changed:
                     save(cfg)
         except Exception as e:  # noqa: BLE001 - never let the watcher die

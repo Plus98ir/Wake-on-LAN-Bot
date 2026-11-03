@@ -290,6 +290,12 @@ func act(r *Req) (string, error) {
 		if !regexp.MustCompile(`^\d{2,5}$`).MatchString(r.Arg) || a.Server == "" {
 			return "", errors.New("bad ip request")
 		}
+		// "ip:port" the modem gave by UPnP (task WOL\Modem, hourly) - a VPN on this PC would show its own IP to the server
+		if st, err := os.Stat(path("modem-ip.txt")); err == nil && time.Since(st.ModTime()) < 2*time.Hour {
+			if b, err := os.ReadFile(path("modem-ip.txt")); err == nil && regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$`).Match(b) {
+				return string(b), nil
+			}
+		}
 		cl := http.Client{Timeout: 8 * time.Second}
 		resp, err := cl.Get("http://" + a.Server + ":" + r.Arg + "/ip")
 		if err != nil {
