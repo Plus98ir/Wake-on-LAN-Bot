@@ -139,6 +139,8 @@ if ($Detect) {
     server  = if ($conf) { "$($conf.server)" } else { "" }
     port    = if ($conf) { $conf.tunnel_port } else { 0 }
     tunnel  = [bool]$tunnel
+    recovery = Test-Path "$Agent\recovery.json"
+    modem   = $(try { $m = Get-Content "$Agent\modem.json" -Raw | ConvertFrom-Json; if ($m.ok) { "$($m.external):$($m.port) -> $($m.local)" } else { "$($m.error)" } } catch { "" })
   } | ConvertTo-Json -Compress -Depth 4
   exit 0
 }

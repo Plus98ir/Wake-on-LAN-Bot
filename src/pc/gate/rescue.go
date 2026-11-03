@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -118,22 +119,11 @@ func rescueMux(setup bool) http.Handler {
 		}
 		var b struct{ Password string }
 		json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&b)
-		if len([]rune(b.Password)) < 8 {
-			setState("setup", "at least 8 characters / حداقل ۸ حرف")
+		if err := saveRecovery(b.Password); err != nil {
+			setState("setup", err.Error())
 			reply(w)
 			return
 		}
-		salt := make([]byte, 16)
-		rand.Read(salt)
-		rec := Recovery{Salt: base64.StdEncoding.EncodeToString(salt), Iter: passIter,
-			Hash: base64.StdEncoding.EncodeToString(passHash(b.Password, salt, passIter))}
-		if err := writeJSON("recovery.json", &rec); err != nil {
-			setState("setup", "cannot save (run as administrator): "+err.Error())
-			reply(w)
-			return
-		}
-		lockACL("recovery.json")
-		logf("RESCUE: recovery password set")
 		setState("saved", "")
 		reply(w)
 		if os.Getenv("WOLGATE_DIR") == "" {
@@ -316,6 +306,32 @@ func rescueUI(kiosk bool) error {
 		args = append(args, "--app=http://"+rescueAddr+"/", "--window-size=760,640")
 	}
 	return exec.Command(edge, args...).Start()
+}
+
+func saveRecovery(p string) error {
+	if len([]rune(p)) < 8 {
+		return errors.New("at least 8 characters / حداقل ۸ حرف")
+	}
+	salt := make([]byte, 16)
+	rand.Read(salt)
+	rec := Recovery{Salt: base64.StdEncoding.EncodeToString(salt), Iter: passIter,
+		Hash: base64.StdEncoding.EncodeToString(passHash(p, salt, passIter))}
+	if err := writeJSON("recovery.json", &rec); err != nil {
+		return errors.New("cannot save (run as administrator): " + err.Error())
+	}
+	lockACL("recovery.json")
+	logf("RESCUE: recovery password set")
+	return nil
+}
+
+// set-recovery --stdin: WOL Agent sends the password on stdin (never on the command line)
+func setRecoveryStdin() {
+	b, _ := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+	if err := saveRecovery(strings.TrimRight(string(b), "\r\n")); err != nil {
+		fmt.Println("recovery password:", err)
+		os.Exit(1)
+	}
+	fmt.Println("recovery password saved")
 }
 
 func setRecovery() {

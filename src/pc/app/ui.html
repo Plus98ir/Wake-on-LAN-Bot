@@ -77,6 +77,9 @@ a{color:var(--acc)}
     <label for="cdir" data-t="cdir"></label>
     <input type="text" id="cdir">
     <div class="help" data-t="cdirHelp"></div>
+    <label for="rp1" data-t="rp"></label>
+    <div class="addrow"><input type="password" id="rp1" autocomplete="new-password"><input type="password" id="rp2" autocomplete="new-password"></div>
+    <div class="help" data-t="rpHelp"></div>
     <div class="chk"><input type="checkbox" id="lock" checked><label for="lock" style="margin:0;font-weight:400" data-t="lock"></label></div>
     <details>
       <summary data-t="adv"></summary>
@@ -142,6 +145,8 @@ a{color:var(--acc)}
 <script>
 const L={
  fa:{title:"WOL Agent — روشن کردن و کنترل سیستم از راه دور",subtitle:"این سیستم را به بات وصل کن: کد را از بات (➕ Add PC) بگیر و نصب را بزن.",
+  rp:"رمز ریکاوری کیل‌سوییچ (دو بار)",rpHelp:"اگر کیل‌سوییچ بزند، صفحه‌ی قرمز همین رمز را می‌خواهد و بعد با اثر انگشت در اپ همه‌چیز برمی‌گردد. حداقل ۸ حرف. بار اول لازم است؛ بعداً اگر خالی بماند رمز قبلی می‌ماند (با دکمه‌ی ذخیره هم عوض می‌شود).",
+  rpShort:"رمز ریکاوری حداقل ۸ حرف باشد.",rpMismatch:"دو رمز ریکاوری یکی نیستند.",rpNeed:"برای بار اول رمز ریکاوری کیل‌سوییچ را بنویس (دو بار).",
   sys:"این سیستم",refresh:"بررسی دوباره",pair:"اتصال به بات",code:"کد اتصال",codeHelp:"در بات بزن ➕ Add PC و کدی که می‌دهد را اینجا بچسبان. یک‌بار مصرف است و ۱۵ دقیقه اعتبار دارد.",
   name:"اسم سیستم",nameHelp:"اسمی که در بات نشان داده می‌شود (فقط حروف انگلیسی، عدد، - و _).",
   cdir:"پوشه‌ی کار Claude",cdirHelp:"دکمه‌ی 🤖 Claude Remote در بات، Claude Code را در این پوشه روشن می‌کند؛ بعد از اپ Claude گوشی یا سایت claude.ai/code ادامه می‌دهی. بار اول یک پنجره باز می‌شود: Enter بزن (یعنی به این پوشه اعتماد دارم) و بعد بنویس ‎/exit.",
@@ -167,8 +172,10 @@ const L={
   m6:"<b>تست:</b> کامپیوتر را خاموش کن و از گوشی در بات Wake را بزن. بعد 🤖 Claude Remote را بزن و از اپ Claude ادامه بده. دکمه‌های دیگر: برنامه‌هایی که انتخاب کردی، Lock (قفل)، Shut down (خاموش).",
   more:"کامپیوتر دیگری داری؟ همین برنامه را روی آن هم اجرا کن و با یک کد تازه از بات وصلش کن.",
   log:"گزارش",yes:"بله",no:"خیر",running:"در حال اجرا…",needCode:"اول کد اتصال را وارد کن.",confirmUn:"همه‌ی تنظیمات WOL Agent از این سیستم حذف شود؟",
-  k:{name:"اسم",user:"کاربر",os:"ویندوز",board:"مادربرد",nic:"کارت شبکه",mac:"MAC",link:"لینک",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",claude:"Claude Code",sshd:"OpenSSH Server",paired:"وصل به بات",tunnel:"تونل"}},
+  k:{name:"اسم",user:"کاربر",os:"ویندوز",board:"مادربرد",nic:"کارت شبکه",mac:"MAC",link:"لینک",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",claude:"Claude Code",sshd:"OpenSSH Server",paired:"وصل به بات",tunnel:"تونل",recovery:"رمز ریکاوری",modem:"پورت مودم (UPnP)"}},
  en:{title:"WOL Agent — wake and control this PC remotely",subtitle:"Link this PC to the bot: get a code from the bot (➕ Add PC) and press Install.",
+  rp:"Kill-switch recovery password (twice)",rpHelp:"If the kill switch fires, the red screen asks for this password, then a fingerprint in the app brings everything back. At least 8 characters. Needed the first time; left empty later, the old one stays (Save changes it too).",
+  rpShort:"The recovery password needs at least 8 characters.",rpMismatch:"The two recovery passwords differ.",rpNeed:"First time: type a kill-switch recovery password (twice).",
   sys:"This PC",refresh:"Check again",pair:"Link to the bot",code:"Pair code",codeHelp:"In the bot press ➕ Add PC and paste the code here. One use, valid 15 minutes.",
   name:"PC name",nameHelp:"Shown in the bot (letters, digits, - and _).",
   cdir:"Claude work folder",cdirHelp:"The bot's 🤖 Claude Remote button starts Claude Code in this folder; you continue from the Claude app or claude.ai/code. The first time a window opens: press Enter (trust this folder), then type /exit.",
@@ -194,7 +201,7 @@ const L={
   m6:"<b>Test:</b> shut the PC down and press Wake in the bot. Then press 🤖 Claude Remote and continue in the Claude app. Other buttons: the apps you picked, Lock, Shut down.",
   more:"Another PC? Run this app there too and link it with a fresh code from the bot.",
   log:"Log",yes:"yes",no:"no",running:"Running…",needCode:"Enter the pair code first.",confirmUn:"Remove all WOL Agent settings from this PC?",
-  k:{name:"Name",user:"User",os:"Windows",board:"Board",nic:"Network card",mac:"MAC",link:"Link",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",claude:"Claude Code",sshd:"OpenSSH Server",paired:"Linked to bot",tunnel:"Tunnel"}}
+  k:{name:"Name",user:"User",os:"Windows",board:"Board",nic:"Network card",mac:"MAC",link:"Link",wol:"Wake on Magic Packet",v2rayn:"v2rayN",vscode:"VS Code",claude:"Claude Code",sshd:"OpenSSH Server",paired:"Linked to bot",tunnel:"Tunnel",recovery:"Recovery password",modem:"Modem port (UPnP)"}}
 };
 let lang=localStorage.getItem("lang")||"fa", info=null;
 const $=id=>document.getElementById(id);
@@ -257,7 +264,9 @@ $("apath").onkeydown=e=>{if(e.key=="Enter")addCustom();};
 function settings(){
   // a path typed without pressing Add still counts
   if($("apath").value.trim()&&!addCustom())return null;
-  return {claudeDir:$("cdir").value.trim(),claudeMode:document.querySelector("input[name=cmode]:checked").value,
+  const p1=$("rp1").value,p2=$("rp2").value;
+  if(p1||p2){if(p1!==p2){alert(L[lang].rpMismatch);return null;}if([...p1].length<8){alert(L[lang].rpShort);return null;}}
+  return {recovery:p1,claudeDir:$("cdir").value.trim(),claudeMode:document.querySelector("input[name=cmode]:checked").value,
     apps:apps.filter(a=>picked.has(akey(a))).map(a=>({name:a.name,path:a.path,args:a.args}))};
 }
 async function detect(){
@@ -272,10 +281,12 @@ async function run(body){
     const rd=r.body.getReader(),dec=new TextDecoder();
     for(;;){const {done,value}=await rd.read();if(done)break;$("out").textContent+=dec.decode(value,{stream:true});$("out").scrollTop=1e9;}
   }catch(e){$("out").textContent+="\nERROR: "+e;}
+  $("rp1").value=$("rp2").value="";
   $("install").disabled=$("uninstall").disabled=$("save").disabled=false;detect();
 }
 $("install").onclick=()=>{const code=$("code").value.trim();if(!code){alert(L[lang].needCode);return;}
   const st=settings();if(!st)return;
+  if(!st.recovery&&!(info&&info.recovery)){alert(L[lang].rpNeed);$("rp1").focus();return;}
   run({action:"install",code,name:$("name").value.trim(),wakeHost:$("wake").value.trim(),extraKey:$("xkey").value.trim(),noLock:!$("lock").checked,...st});};
 $("save").onclick=()=>{if(!info||!info.paired){alert(L[lang].notPaired);return;}const st=settings();if(st)run({action:"update",...st});};
 $("csetup").onclick=()=>run({action:"claude-setup"});

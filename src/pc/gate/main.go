@@ -501,7 +501,11 @@ func main() {
 			logf("RESCUE UI: %v", err)
 		}
 	case "set-recovery":
-		setRecovery()
+		if len(os.Args) > 2 && os.Args[2] == "--stdin" {
+			setRecoveryStdin()
+		} else {
+			setRecovery()
+		}
 	case "snapshot": // what the watchdog sees right now
 		s, err := snapshot()
 		if err != nil {

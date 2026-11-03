@@ -132,6 +132,7 @@ type runReq struct {
 	ClaudeMode string          `json:"claudeMode"` // hidden | vscode
 	Apps       json.RawMessage `json:"apps"`       // [{name, path, args}] = the bot's app buttons
 	NoLock     bool            `json:"noLock"`
+	Recovery   string          `json:"recovery"` // kill-switch recovery password, given to wol-gate on stdin
 }
 
 // appArgs passes the shared settings of install and update to setup-pc.ps1.
@@ -230,11 +231,32 @@ func runHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if c.ProcessState != nil && c.ProcessState.ExitCode() != 0 {
-		fmt.Fprintf(w, "\n__EXIT__ %d\n", c.ProcessState.ExitCode())
-	} else {
-		fmt.Fprint(w, "\n__EXIT__ 0\n")
+	rc := 0
+	if c.ProcessState != nil {
+		rc = c.ProcessState.ExitCode()
 	}
+	if rc == 0 && req.Recovery != "" && (req.Action == "install" || req.Action == "update") {
+		rc = setRecovery(w, req.Recovery)
+	}
+	fmt.Fprintf(w, "\n__EXIT__ %d\n", rc)
+}
+
+// setRecovery saves the kill-switch recovery password with the installed wol-gate (on stdin, never on a command line).
+func setRecovery(w io.Writer, pass string) int {
+	g := filepath.Join(os.Getenv("ProgramData"), "wol-agent", "wol-gate.exe")
+	if _, err := os.Stat(g); err != nil {
+		fmt.Fprintln(w, "\nRecovery password: no wol-gate on this PC (no fingerprint site on the server) - not needed.")
+		return 0
+	}
+	c := exec.Command(g, "set-recovery", "--stdin")
+	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	c.Stdin = strings.NewReader(pass)
+	out, err := c.CombinedOutput()
+	fmt.Fprintf(w, "\n%s", out)
+	if err != nil {
+		return 1
+	}
+	return 0
 }
 
 // openWindow uses Edge app mode (own profile, so the window is ours); falls back to the default browser.
