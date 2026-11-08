@@ -3,7 +3,7 @@
 <h1 align="center">Wake-on-LAN Bot</h1>
 
 <p align="center">Turn your PC on from your phone, control it, and get an alert the moment something changes on it. Phone app (PWA), with an optional Bale or Telegram bot.<br>
-<a href="#فارسی">فارسی</a> · <a href="https://plus98ir.dpdns.org/Wake-on-LAN-Bot/">Website</a> · <a href="../../releases/latest">Download</a></p>
+<a href="#فارسی">فارسی</a> · <a href="https://corenetbase.com/Wake-on-LAN-Bot/">Website</a> · <a href="../../releases/latest">Download</a></p>
 
 ---
 
