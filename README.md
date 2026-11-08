@@ -2,6 +2,9 @@
 
 <h1 align="center">Wake-on-LAN Bot</h1>
 
+
+<p align="center"><a href="https://hits.sh/github.com/Plus98ir/Wake-on-LAN-Bot/"><img src="https://hits.sh/github.com/Plus98ir/Wake-on-LAN-Bot.svg?style=for-the-badge&label=views&color=2563eb" alt="Views"></a> <a href="https://corenetbase.com/#support"><img src="https://img.shields.io/badge/support-buy%20me%20a%20coffee-e11d2a?style=for-the-badge&logo=buymeacoffee&logoColor=white" alt="Support"></a></p>
+
 <p align="center">Turn your PC on from your phone, control it, and get an alert the moment something changes on it. Phone app (PWA), with an optional Bale or Telegram bot.<br>
 <a href="#فارسی">فارسی</a> · <a href="https://corenetbase.com/Wake-on-LAN-Bot/">Website</a> · <a href="../../releases/latest">Download</a></p>
 
