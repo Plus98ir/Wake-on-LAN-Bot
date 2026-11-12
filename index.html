@@ -8,15 +8,17 @@
 <meta property="og:image" content="https://raw.githubusercontent.com/Plus98ir/Wake-on-LAN-Bot/main/Wake-on-LAN-Bot.png">
 <link rel="icon" href="src/pc/app/icon.png">
 <style>
+:root{--gutter:max(50px,3vw)}@media (max-width:640px){:root{--gutter:16px}}
+
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--text:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--acc2:#7c3aed;--ok:#3fb950;
   --font:"Segoe UI",Tahoma,"Vazirmatn",system-ui,sans-serif}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 var(--font)}
-header{display:flex;align-items:center;gap:14px;padding:16px 32px;border-bottom:1px solid var(--line)}
+header{display:flex;align-items:center;gap:14px;padding:16px var(--gutter);border-bottom:1px solid var(--line)}
 header img{width:40px;height:40px}
 header b{flex:1;font-size:18px}
 .lang{background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 14px;font:14px var(--font);cursor:pointer}
-main{width:100%;padding:24px 32px}
+main{width:100%;padding:24px var(--gutter)}
 .hero{display:grid;grid-template-columns:1.3fr 1fr;gap:32px;align-items:center;padding:32px 0 40px}
 .hero h1{font-size:40px;line-height:1.25;margin:0 0 14px}
 .hero h1 span{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -42,9 +44,9 @@ ol.steps b{display:block;margin-bottom:4px}
 ol.steps span{color:var(--mut);font-size:15px}
 pre{background:#0b0f14;border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;direction:ltr;text-align:left;font:14px/1.6 Consolas,monospace;margin:0}
 .diagram{white-space:pre;font-size:13px}
-footer{padding:24px 32px;border-top:1px solid var(--line);color:var(--mut);font-size:14px;margin-top:40px}
+footer{padding:24px var(--gutter);border-top:1px solid var(--line);color:var(--mut);font-size:14px;margin-top:40px}
 footer a,main a{color:var(--acc)}
-@media (max-width:800px){header,main,footer{padding-left:16px;padding-right:16px}.hero{grid-template-columns:1fr}.hero h1{font-size:30px}}
+@media (max-width:800px){header,main,footer{padding-left:var(--gutter);padding-right:var(--gutter)}.hero{grid-template-columns:1fr}.hero h1{font-size:30px}}
 </style>
 </head>
 <body>
